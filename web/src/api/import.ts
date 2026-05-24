@@ -1,7 +1,5 @@
-import { apiFetch } from './client';
+import { apiFetch, BASE_URL } from './client';
 import type { StagedRow, ImportResult } from '../types';
-
-const BASE_URL = (import.meta.env.VITE_API_URL as string | undefined) ?? 'http://localhost:8000';
 
 /**
  * Upload a CSV file. Returns staged (unpersisted) rows with duplicate flags

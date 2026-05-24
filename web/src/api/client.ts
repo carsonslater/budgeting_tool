@@ -5,7 +5,11 @@
  * http://localhost:8000 so the dev server talks to the local FastAPI backend.
  */
 
-const BASE_URL = (import.meta.env.VITE_API_URL as string | undefined) ?? 'http://localhost:8000';
+export const BASE_URL =
+  (import.meta.env.VITE_API_URL as string | undefined) ??
+  (typeof window !== 'undefined' && window.location.port === '5173'
+    ? `${window.location.protocol}//${window.location.hostname}:8000`
+    : '');
 
 export class ApiError extends Error {
   status: number;

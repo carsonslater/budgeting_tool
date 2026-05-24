@@ -5,11 +5,35 @@ DB path is resolved relative to this file so the server works regardless
 of the working directory it is launched from.
 """
 
+import os
 import sqlite3
+import sys
 from pathlib import Path
 
-# Always resolve relative to this file's location (backend/)
-_DB_PATH = Path(__file__).parent.parent / "data" / "budget.db"
+def get_db_path() -> Path:
+    """Resolve the SQLite database path, supporting both development and PyInstaller environments."""
+    # Allow explicit override via environment variable
+    env_path = os.environ.get("BUDGET_DB_PATH")
+    if env_path:
+        return Path(env_path)
+
+    # Check if running in a packaged/frozen PyInstaller environment
+    if getattr(sys, "frozen", False):
+        exe_path = Path(sys.executable)
+        # If packaged as a macOS app bundle, sys.executable is deep inside:
+        # /path/to/dist/desktop_app.app/Contents/MacOS/desktop_app
+        if "Contents/MacOS" in str(exe_path):
+            base_dir = exe_path.parent.parent.parent.parent
+        else:
+            base_dir = exe_path.parent
+        return base_dir / "data" / "budget.db"
+
+    # Development mode: resolve relative to this file's directory (backend/)
+    return Path(__file__).parent.parent / "data" / "budget.db"
+
+
+# Always resolve relative to a persistent, stable location
+_DB_PATH = get_db_path()
 
 
 def get_db() -> sqlite3.Connection:
