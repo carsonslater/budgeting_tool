@@ -59,7 +59,8 @@ def budget_summary(
         # Active budgets during this month
         budgets = conn.execute(
             """SELECT * FROM budgets
-               WHERE effective_date <= ?
+               WHERE limit_amount > 0
+                 AND effective_date <= ?
                  AND (conclusion_date IS NULL OR conclusion_date >= ?)
                ORDER BY category, subcategory""",
             (last, first),

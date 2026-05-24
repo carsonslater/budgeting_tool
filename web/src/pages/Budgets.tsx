@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { format, startOfMonth, parseISO } from 'date-fns';
+import { format, startOfMonth, endOfMonth, parseISO } from 'date-fns';
 import { Trash2, ChevronDown, ChevronRight } from 'lucide-react';
 import { Card } from '../components/ui/Card';
 import { Input } from '../components/ui/Input';
@@ -55,6 +55,7 @@ export const Budgets: React.FC = () => {
   // Form State
   const [editId, setEditId] = useState<number | null>(null);
   const [effectiveDate, setEffectiveDate] = useState(format(startOfMonth(new Date()), 'yyyy-MM-dd'));
+  const [conclusionDate, setConclusionDate] = useState('');
   const [category, setCategory] = useState('');
   const [subcategory, setSubcategory] = useState('');
   const [frequency, setFrequency] = useState('Monthly');
@@ -68,6 +69,7 @@ export const Budgets: React.FC = () => {
   const resetForm = () => {
     setEditId(null);
     setEffectiveDate(format(startOfMonth(new Date()), 'yyyy-MM-dd'));
+    setConclusionDate('');
     setCategory('');
     setSubcategory('');
     setFrequency('Monthly');
@@ -77,6 +79,7 @@ export const Budgets: React.FC = () => {
   const handleRowClick = (b: Budget) => {
     setEditId(b.id);
     setEffectiveDate(b.effective_date);
+    setConclusionDate(b.conclusion_date ? b.conclusion_date.substring(0, 7) : '');
     setCategory(b.category);
     setSubcategory(b.subcategory);
     setFrequency(b.frequency);
@@ -107,7 +110,7 @@ export const Budgets: React.FC = () => {
       subcategory,
       frequency: frequency as Budget['frequency'],
       limit_amount: parseFloat(limit) || 0,
-      conclusion_date: null,
+      conclusion_date: conclusionDate ? format(endOfMonth(parseISO(`${conclusionDate}-01`)), 'yyyy-MM-dd') : null,
     };
 
     if (editId) {
@@ -173,6 +176,13 @@ export const Budgets: React.FC = () => {
               value={effectiveDate.substring(0, 7)}
               onChange={(e) => setEffectiveDate(`${e.target.value}-01`)}
               required
+            />
+
+            <Input
+              type="month"
+              label="Termination Month (Optional)"
+              value={conclusionDate}
+              onChange={(e) => setConclusionDate(e.target.value)}
             />
 
             <Input

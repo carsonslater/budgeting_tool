@@ -89,7 +89,8 @@ def get_suggested_budgets() -> list[dict]:
         # Active budgets today
         active = conn.execute(
             """SELECT * FROM budgets
-               WHERE effective_date <= ?
+               WHERE limit_amount > 0
+                 AND effective_date <= ?
                  AND (conclusion_date IS NULL OR conclusion_date >= ?)
                ORDER BY category, subcategory""",
             (today.isoformat(), today.isoformat()),
@@ -152,7 +153,7 @@ def get_suggested_budgets() -> list[dict]:
 def list_budgets() -> list[dict]:
     with get_db() as conn:
         rows = conn.execute(
-            "SELECT * FROM budgets ORDER BY category, subcategory, effective_date"
+            "SELECT * FROM budgets WHERE limit_amount > 0 ORDER BY category, subcategory, effective_date"
         ).fetchall()
     return [_row_to_dict(r) for r in rows]
 
