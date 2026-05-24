@@ -1,0 +1,259 @@
+.container {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+.heroContent {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 2rem 0;
+}
+
+.arcContainer {
+  position: relative;
+  width: 250px;
+  height: 125px;
+  margin-bottom: 1.5rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+.arcSvg {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.arcBackground {
+  fill: none;
+  stroke: var(--color-border);
+  stroke-width: 12;
+  stroke-linecap: round;
+}
+
+.arcForeground {
+  fill: none;
+  stroke: var(--color-accent);
+  stroke-width: 12;
+  stroke-linecap: round;
+  transition: stroke-dashoffset 1.5s ease-out;
+}
+
+.arcForeground.over {
+  stroke: var(--color-danger);
+}
+
+.heroAmount {
+  font-family: 'Spectral', serif;
+  font-weight: 600;
+  font-size: 3rem;
+  color: var(--color-text);
+  line-height: 1;
+  margin-bottom: 0.25rem;
+}
+
+.heroLabel {
+  color: var(--color-text-muted);
+  font-size: 0.9rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.statsRow {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1.5rem;
+}
+
+.statValue {
+  font-family: 'Spectral', serif;
+  font-weight: 600;
+  font-size: 2.25rem;
+  margin-top: 0.5rem;
+}
+
+.statValue.success { color: var(--color-success); }
+.statValue.danger { color: var(--color-danger); }
+
+.statSubtitle {
+  font-size: 0.85rem;
+  color: var(--color-text-muted);
+  margin-top: 0.25rem;
+}
+
+.columnsRow {
+  display: grid;
+  grid-template-columns: 3fr 2fr;
+  gap: 1.5rem;
+}
+
+.budgetTable {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.budgetTable th,
+.budgetTable td {
+  padding: 0.75rem 0.5rem;
+  text-align: left;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.budgetTable th {
+  color: var(--color-text-muted);
+  font-weight: normal;
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.budgetTable tr:last-child td {
+  border-bottom: none;
+}
+
+.amountCell {
+  text-align: right !important;
+  font-family: 'Spectral', serif;
+}
+
+.badgeCell {
+  text-align: right !important;
+  width: 100px;
+}
+
+.expenseList {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.expenseItem {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.75rem;
+  background-color: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+}
+
+.expenseDesc {
+  font-weight: 500;
+  color: var(--color-text);
+  margin-bottom: 0.25rem;
+}
+
+.expenseMeta {
+  font-size: 0.85rem;
+  color: var(--color-text-muted);
+}
+
+.expenseAmount {
+  font-family: 'Spectral', serif;
+  font-weight: 600;
+  font-size: 1.1rem;
+}
+
+.goalsRow {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 1.5rem;
+}
+
+.goalCard {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.goalHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+}
+
+.goalName {
+  font-weight: 500;
+  font-size: 1.1rem;
+}
+
+.goalTarget {
+  font-family: 'Spectral', serif;
+  color: var(--color-text-muted);
+  font-weight: 600;
+}
+
+.progressBarContainer {
+  height: 8px;
+  background-color: var(--color-border);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.progressBarFill {
+  height: 100%;
+  background-color: var(--color-accent);
+  transition: width 1.5s ease-out;
+}
+
+.progressBarFill.complete {
+  background-color: var(--color-success);
+}
+
+.goalMeta {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.85rem;
+  color: var(--color-text-muted);
+}
+
+/* Skeleton Loading */
+.skeleton {
+  animation: pulse 1.5s infinite ease-in-out;
+  background-color: var(--color-surface-raised);
+  border-radius: 4px;
+}
+
+@keyframes pulse {
+  0% { opacity: 0.6; }
+  50% { opacity: 1; }
+  100% { opacity: 0.6; }
+}
+
+.skeletonText {
+  height: 1rem;
+  width: 60%;
+  margin-bottom: 0.5rem;
+}
+
+.skeletonTitle {
+  height: 1.5rem;
+  width: 40%;
+  margin-bottom: 1rem;
+}
+
+.skeletonAmount {
+  height: 2.5rem;
+  width: 50%;
+}
+
+.skeletonArc {
+  width: 250px;
+  height: 125px;
+  border-top-left-radius: 125px;
+  border-top-right-radius: 125px;
+}
+
+.emptyState {
+  color: var(--color-text-muted);
+  padding: 1rem;
+  text-align: center;
+  font-style: italic;
+}

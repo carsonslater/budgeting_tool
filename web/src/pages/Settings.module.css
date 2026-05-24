@@ -1,0 +1,165 @@
+.container {
+  display: flex;
+  flex-direction: column;
+  gap: 2rem;
+  max-width: 1100px;
+  margin: 0 auto;
+  padding-bottom: 2rem;
+}
+
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.sectionTitle {
+  font-size: 1.25rem;
+  font-weight: 600;
+  margin-bottom: 0.5rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.backupRow {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.backupTime {
+  font-size: 0.9rem;
+  color: var(--color-text-muted);
+}
+
+/* Upload Dropzone */
+.dropZone {
+  border: 2px dashed var(--color-border);
+  border-radius: 8px;
+  padding: 4rem 2rem;
+  text-align: center;
+  cursor: pointer;
+  background-color: var(--color-surface);
+  transition: all 0.2s ease-in-out;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1rem;
+}
+
+.dropZone:hover, .dropZoneActive {
+  border-color: var(--color-accent);
+  background-color: rgba(255, 103, 25, 0.05);
+}
+
+.dropTitle {
+  font-size: 1.25rem;
+  font-weight: 600;
+}
+
+.dropSubtitle {
+  font-size: 0.95rem;
+  color: var(--color-text-muted);
+}
+
+.formatBadges {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 1rem;
+}
+
+/* Staging Area */
+.stagingContainer {
+  display: grid;
+  grid-template-columns: 1fr 340px;
+  gap: 1.5rem;
+  align-items: start;
+}
+
+.stagingToolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 1rem;
+}
+
+.toolbarStats {
+  font-size: 0.95rem;
+  color: var(--color-text-muted);
+}
+
+.toolbarActions {
+  display: flex;
+  gap: 0.75rem;
+}
+
+.tableWrapper {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  overflow-x: auto;
+  max-height: 600px;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.table th {
+  background: var(--color-surface-raised);
+  padding: 0.75rem 1rem;
+  text-align: left;
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--color-text-muted);
+  border-bottom: 1px solid var(--color-border);
+  position: sticky;
+  top: 0;
+}
+
+.table td {
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid var(--color-border);
+  font-size: 0.95rem;
+  vertical-align: middle;
+}
+
+.table tr.selected {
+  background-color: rgba(255, 103, 25, 0.1);
+}
+
+.table tr.duplicateRow {
+  background-color: rgba(224, 82, 82, 0.08);
+}
+
+.table tr:hover {
+  background-color: var(--color-surface-raised);
+  cursor: pointer;
+}
+
+.checkbox {
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+}
+
+.amountCell {
+  text-align: right !important;
+  font-family: 'Spectral', serif;
+  font-weight: 500;
+}
+
+/* Right Sidebar Editor */
+.editorForm {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.editorTitle {
+  font-size: 1.1rem;
+  font-weight: 600;
+  margin-bottom: 0.5rem;
+  color: var(--color-accent);
+}

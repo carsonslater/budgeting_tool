@@ -1,0 +1,82 @@
+# ==============================================================================
+# Household Budgeting App - Git Ignore Rules
+# ==============================================================================
+
+# --- Databases & Local Data ---
+*.db
+*.db-journal
+*.db-wal
+*.sqlite
+data/*.db
+data/*.sqlite
+
+# --- CSVs & Import Source Files ---
+*.csv
+*.xlsx
+*.tsv
+data/*.csv
+data/*.xlsx
+data/*.tsv
+
+# --- Backup Directories ---
+backups/
+data/backups/
+
+# --- Python Virtual Environments & Packages ---
+.venv/
+venv/
+ENV/
+env/
+active_venv/
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# --- Python Runtime & Cache ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+.coverage
+htmlcov/
+.noserc
+nosetests.xml
+coverage.xml
+*.xml
+*.log
+app.log
+
+# --- Node / React Frontend (Vite) ---
+node_modules/
+web/node_modules/
+web/dist/
+.eslintcache
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.npm
+
+# --- IDEs, Text Editors, & OS Metadata ---
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+.vscode/
+!.vscode/extensions.json
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.swp
+*.swo
+
+# --- Legacy R Artifacts ---
+.Rhistory
+.RData
+.Rproj.user/

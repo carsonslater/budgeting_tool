@@ -1,0 +1,238 @@
+.container {
+  display: grid;
+  grid-template-columns: 340px 1fr;
+  gap: 2rem;
+  height: calc(100vh - 120px);
+  overflow: hidden;
+}
+
+/* Sidebar */
+.sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+  overflow-y: auto;
+  padding-right: 0.5rem;
+}
+
+.formCard {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.summaryBox {
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--color-border);
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.summaryTitle {
+  font-size: 0.85rem;
+  color: var(--color-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.summaryValue {
+  font-family: 'Spectral', serif;
+  font-size: 1.25rem;
+  font-weight: 600;
+}
+
+.summarySubtext {
+  font-size: 0.85rem;
+  color: var(--color-text-muted);
+}
+
+/* Main Area */
+.mainArea {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+  overflow-y: auto;
+  padding-right: 0.5rem;
+}
+
+.sectionHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.5rem;
+}
+
+.sectionTitle {
+  font-size: 1.1rem;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  cursor: pointer;
+  user-select: none;
+}
+
+.goalList {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.goalCard {
+  transition: all 0.2s ease-in-out;
+}
+
+.goalCardExpanded {
+  border-color: var(--color-accent);
+}
+
+.goalHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 0.5rem;
+}
+
+.goalTitle {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 1.25rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.goalTitle:hover {
+  color: var(--color-accent);
+}
+
+.goalActions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.goalStats {
+  font-family: 'Spectral', serif;
+  color: var(--color-text-muted);
+  margin-bottom: 0.5rem;
+}
+
+.goalStats b {
+  color: var(--color-text);
+}
+
+.progressWrapper {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  margin-bottom: 0.5rem;
+}
+
+.progressBarContainer {
+  flex: 1;
+  height: 8px;
+  background-color: var(--color-surface-raised);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.progressBarFill {
+  height: 100%;
+  background-color: var(--color-accent);
+  transition: width 1s ease-out;
+}
+
+.progressText {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--color-text);
+  width: 35px;
+  text-align: right;
+}
+
+.goalMeta {
+  font-size: 0.85rem;
+  color: var(--color-text-muted);
+}
+
+.linkChips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+}
+
+.chip {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  background: var(--color-surface-raised);
+  border: 1px solid var(--color-border);
+  padding: 0.25rem 0.5rem;
+  border-radius: 4px;
+  font-size: 0.8rem;
+}
+
+.chipRemove {
+  cursor: pointer;
+  color: var(--color-text-muted);
+}
+.chipRemove:hover {
+  color: var(--color-danger);
+}
+
+/* Expanded Links Editor */
+.linksEditor {
+  margin-top: 1.25rem;
+  padding-top: 1.25rem;
+  border-top: 1px solid var(--color-border);
+}
+
+.linksTitle {
+  font-size: 0.95rem;
+  font-weight: 600;
+  margin-bottom: 0.75rem;
+}
+
+.linksForm {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+  align-items: end;
+}
+
+.linkButtonWrapper {
+  grid-column: 1 / -1;
+  display: flex;
+  justify-content: flex-end;
+}
+
+/* Modals */
+.modalOverlay {
+  position: fixed;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(0,0,0,0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+}
+
+.modalContent {
+  background: var(--color-surface);
+  padding: 1.5rem;
+  border-radius: 8px;
+  border: 1px solid var(--color-border);
+  max-width: 400px;
+  width: 100%;
+}
+
+.modalActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 1rem;
+  margin-top: 1.5rem;
+}
