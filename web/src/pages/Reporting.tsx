@@ -323,7 +323,7 @@ export const Reporting: React.FC = () => {
                   <XAxis type="number" stroke="var(--color-text-muted)" fontSize={12} tickLine={false} axisLine={false} tickFormatter={(val) => `$${val}`} />
                   <YAxis dataKey="name" type="category" stroke="var(--color-text-muted)" fontSize={12} tickLine={false} axisLine={false} width={80} />
                   <Tooltip content={<CustomTooltip />} />
-                  <Bar dataKey="amount" fill="var(--color-accent)" radius={[0, 4, 4, 0]} animationDuration={1000} />
+                  <Bar name="Amount" dataKey="amount" fill="var(--color-accent)" radius={[0, 4, 4, 0]} animationDuration={1000} />
                 </BarChart>
               </ResponsiveContainer>
             </div>
