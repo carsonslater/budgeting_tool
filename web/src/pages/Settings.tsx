@@ -7,7 +7,7 @@ import { Button } from '../components/ui/Button';
 import { Badge } from '../components/ui/Badge';
 import { Input } from '../components/ui/Input';
 import { useStageImport, useConfirmImport } from '../hooks/useImport';
-import { useCategories, usePayers } from '../hooks/useExpenses';
+import { useCategories, usePayers, useSubcategories } from '../hooks/useExpenses';
 import { useToast } from '../contexts/ToastContext';
 import { apiFetch } from '../api/client';
 import styles from './Settings.module.css';
@@ -22,26 +22,29 @@ function formatCurrency(amount: number) {
 
 export const AppSettings: React.FC = () => {
   const { showToast } = useToast();
-  const { data: categories } = useCategories();
-  const { data: payers } = usePayers();
   
-  const stageMutation = useStageImport();
-  const confirmMutation = useConfirmImport();
-
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  
-  const [backingUp, setBackingUp] = useState(false);
-  const [lastBackup, setLastBackup] = useState<string | null>(null);
+  // Editor State
+  const [editCategory, setEditCategory] = useState('');
+  const [editSubcategory, setEditSubcategory] = useState('');
+  const [editPayer, setEditPayer] = useState('');
 
   // Import State
   const [isDragging, setIsDragging] = useState(false);
   const [stagedRows, setStagedRows] = useState<StagedRow[]>([]);
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
 
-  // Editor State
-  const [editCategory, setEditCategory] = useState('');
-  const [editSubcategory, setEditSubcategory] = useState('');
-  const [editPayer, setEditPayer] = useState('');
+  const [backingUp, setBackingUp] = useState(false);
+  const [lastBackup, setLastBackup] = useState<string | null>(null);
+
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Queries & Mutations
+  const { data: categories } = useCategories();
+  const { data: payers } = usePayers();
+  const { data: subcategories } = useSubcategories(editCategory);
+  
+  const stageMutation = useStageImport();
+  const confirmMutation = useConfirmImport();
 
   // ── Data Management ──
   const handleBackup = async () => {
@@ -310,6 +313,7 @@ export const AppSettings: React.FC = () => {
                 />
                 <Input
                   label="Subcategory"
+                  list="subcat-list"
                   value={editSubcategory}
                   onChange={e => setEditSubcategory(e.target.value)}
                   disabled={selectedIds.size === 0}
@@ -331,6 +335,9 @@ export const AppSettings: React.FC = () => {
 
               <datalist id="cat-list">
                 {categories?.map(c => <option key={c} value={c} />)}
+              </datalist>
+              <datalist id="subcat-list">
+                {subcategories?.map(s => <option key={s} value={s} />)}
               </datalist>
               <datalist id="payer-list">
                 {payers?.map(p => <option key={p} value={p} />)}

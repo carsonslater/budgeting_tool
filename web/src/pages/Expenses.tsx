@@ -5,7 +5,7 @@ import { Card } from '../components/ui/Card';
 import { Input } from '../components/ui/Input';
 import { Button } from '../components/ui/Button';
 import { Badge } from '../components/ui/Badge';
-import { useExpenses, useExpenseActions, useCategories, usePayers } from '../hooks/useExpenses';
+import { useExpenses, useExpenseActions, useCategories, usePayers, useSubcategories } from '../hooks/useExpenses';
 import { useGoals } from '../hooks/useGoals';
 import { EmptyState } from '../components/ui/EmptyState';
 import styles from './Expenses.module.css';
@@ -21,12 +21,6 @@ function formatCurrency(amount: number) {
 const PAGE_SIZE = 25;
 
 export const Expenses: React.FC = () => {
-  const { data: allExpenses, isLoading } = useExpenses();
-  const { data: categories } = useCategories();
-  const { data: payers } = usePayers();
-  const { data: goals } = useGoals();
-  const { create, update, remove } = useExpenseActions();
-
   // Form State
   const [editId, setEditId] = useState<number | null>(null);
   const [date, setDate] = useState(format(new Date(), 'yyyy-MM-dd'));
@@ -47,6 +41,14 @@ export const Expenses: React.FC = () => {
   
   // Modal State
   const [showDeleteModal, setShowDeleteModal] = useState(false);
+
+  // Queries & Mutations
+  const { data: allExpenses, isLoading } = useExpenses();
+  const { data: categories } = useCategories();
+  const { data: payers } = usePayers();
+  const { data: subcategories } = useSubcategories(category);
+  const { data: goals } = useGoals();
+  const { create, update, remove } = useExpenseActions();
 
   const resetForm = () => {
     setEditId(null);
@@ -239,6 +241,7 @@ export const Expenses: React.FC = () => {
                 />
                 <Input
                   label="Subcategory"
+                  list="subcategories-list"
                   value={subcategory}
                   onChange={(e) => setSubcategory(e.target.value)}
                   required
@@ -279,6 +282,11 @@ export const Expenses: React.FC = () => {
           <datalist id="categories-list">
             {categories?.map((c) => (
               <option key={c} value={c} />
+            ))}
+          </datalist>
+          <datalist id="subcategories-list">
+            {subcategories?.map((s) => (
+              <option key={s} value={s} />
             ))}
           </datalist>
           <datalist id="payers-list">

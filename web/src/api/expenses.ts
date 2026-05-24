@@ -29,3 +29,6 @@ export const fetchCategories = () =>
 
 export const fetchPayers     = () =>
   api.get<string[]>('/api/expenses/payers');
+
+export const fetchSubcategories = (category?: string) =>
+  api.get<string[]>(`/api/expenses/subcategories${category ? `?category=${encodeURIComponent(category)}` : ''}`);

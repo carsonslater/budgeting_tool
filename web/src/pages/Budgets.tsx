@@ -5,7 +5,7 @@ import { Card } from '../components/ui/Card';
 import { Input } from '../components/ui/Input';
 import { Button } from '../components/ui/Button';
 import { Select } from '../components/ui/Select';
-import { useCategories } from '../hooks/useExpenses';
+import { useCategories, useSubcategories } from '../hooks/useExpenses';
 import { useBudgets, useBudgetActions, useSuggestedBudgets } from '../hooks/useBudgets';
 import { useIncome, useSetIncome } from '../hooks/useIncome';
 import styles from './Budgets.module.css';
@@ -37,20 +37,8 @@ function toPeriodLimit(monthlyAmount: number, frequency: string) {
 }
 
 export const Budgets: React.FC = () => {
-  const { data: budgets, isLoading: loadingBudgets } = useBudgets();
-  const { data: suggestions } = useSuggestedBudgets();
-  const { data: incomeData } = useIncome();
-  const setIncomeMutation = useSetIncome();
-  const { data: categories } = useCategories();
-  const { create, update, remove } = useBudgetActions();
-
   // Income State
   const [incomeInput, setIncomeInput] = useState('');
-  useEffect(() => {
-    if (typeof incomeData === 'number') {
-      setIncomeInput(incomeData.toString());
-    }
-  }, [incomeData]);
 
   // Form State
   const [editId, setEditId] = useState<number | null>(null);
@@ -65,6 +53,21 @@ export const Budgets: React.FC = () => {
   const [showUpcoming, setShowUpcoming] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [showDeleteModal, setShowDeleteModal] = useState(false);
+
+  // Queries & Mutations
+  const { data: budgets, isLoading: loadingBudgets } = useBudgets();
+  const { data: suggestions } = useSuggestedBudgets();
+  const { data: incomeData } = useIncome();
+  const setIncomeMutation = useSetIncome();
+  const { data: categories } = useCategories();
+  const { data: subcategories } = useSubcategories(category);
+  const { create, update, remove } = useBudgetActions();
+
+  useEffect(() => {
+    if (typeof incomeData === 'number') {
+      setIncomeInput(incomeData.toString());
+    }
+  }, [incomeData]);
 
   const resetForm = () => {
     setEditId(null);
@@ -195,6 +198,7 @@ export const Budgets: React.FC = () => {
             
             <Input
               label="Subcategory"
+              list="subcategories-list"
               value={subcategory}
               onChange={(e) => setSubcategory(e.target.value)}
             />
@@ -236,6 +240,11 @@ export const Budgets: React.FC = () => {
           <datalist id="categories-list">
             {categories?.map((c) => (
               <option key={c} value={c} />
+            ))}
+          </datalist>
+          <datalist id="subcategories-list">
+            {subcategories?.map((s) => (
+              <option key={s} value={s} />
             ))}
           </datalist>
         </Card>

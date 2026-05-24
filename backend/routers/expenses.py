@@ -71,6 +71,27 @@ def list_payers() -> list[str]:
     return [r["payer"] for r in rows]
 
 
+@router.get("/subcategories")
+def list_subcategories(category: Optional[str] = Query(None)) -> list[str]:
+    """Retrieve distinct subcategories from both expenses and budgets."""
+    sql_exp = "SELECT DISTINCT subcategory FROM expenses WHERE subcategory != ''"
+    sql_bud = "SELECT DISTINCT subcategory FROM budgets WHERE subcategory != ''"
+    params_exp = []
+    params_bud = []
+    if category:
+        sql_exp += " AND category = ?"
+        sql_bud += " AND category = ?"
+        params_exp.append(category)
+        params_bud.append(category)
+        
+    with get_db() as conn:
+        rows_exp = conn.execute(sql_exp, params_exp).fetchall()
+        rows_bud = conn.execute(sql_bud, params_bud).fetchall()
+        
+    subs = set([r["subcategory"] for r in rows_exp] + [r["subcategory"] for r in rows_bud])
+    return sorted(list(subs))
+
+
 @router.get("")
 def list_expenses(
     start: Optional[str] = Query(None, description="ISO date YYYY-MM-DD"),

@@ -6,6 +6,7 @@ import {
   deleteExpense,
   fetchCategories,
   fetchPayers,
+  fetchSubcategories,
 } from '../api/expenses';
 import type { ExpenseCreate, ExpenseFilters, ExpenseUpdate } from '../types';
 
@@ -39,6 +40,14 @@ export function usePayers() {
   return useQuery({
     queryKey: expenseKeys.payers,
     queryFn:  fetchPayers,
+    staleTime: 5 * 60_000,
+  });
+}
+
+export function useSubcategories(category?: string) {
+  return useQuery({
+    queryKey: ['expenses', 'subcategories', category ?? 'all'],
+    queryFn:  () => fetchSubcategories(category),
     staleTime: 5 * 60_000,
   });
 }
