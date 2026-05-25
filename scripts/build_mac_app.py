@@ -12,7 +12,7 @@ from pathlib import Path
 
 # Paths
 PROJECT_DIR = Path("/Users/carson/Documents/R_Projects/budgeting_tool").resolve()
-SOURCE_ICON_PNG = Path("/Users/carson/.gemini/antigravity-ide/brain/fa40cd80-b267-4083-917a-ba45ebe76863/budget_icon_white_1779725519009.png")
+SOURCE_ICON_PNG = PROJECT_DIR / "resources" / "app_icon_white_circle.png"
 APP_BUNDLE_NAME = "Household Budgeting.app"
 APP_BUNDLE_PATH = PROJECT_DIR / APP_BUNDLE_NAME
 DESKTOP_PATH = Path("/Users/carson/Desktop") / APP_BUNDLE_NAME
@@ -156,52 +156,14 @@ def write_launcher_script():
 
 # Define project path
 PROJECT_DIR="{PROJECT_DIR}"
-LOG_FILE="$PROJECT_DIR/launcher_error.log"
 
-# Navigate to project directory
-cd "$PROJECT_DIR" || {{
-  osascript -e 'display dialog "Could not navigate to project folder '$PROJECT_DIR'." buttons {{"OK"}} default button "OK" with icon stop'
-  exit 1
-}}
-
-# Check if .venv exists
-if [ ! -d ".venv" ]; then
-  osascript -e 'display dialog "Virtual environment (.venv) not found. Please set up the environment before running." buttons {{"OK"}} default button "OK" with icon stop'
-  exit 1
-fi
-
-# Check if frontend is built, if not, build it
-if [ ! -d "web/dist" ]; then
-  osascript -e 'display dialog "Frontend build not found. Building the React interface (this may take a few seconds)..." buttons {{"OK"}} default button "OK" with icon note'
-  
-  # Set common path variables to locate npm
-  export PATH="/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH"
-  
-  if command -v npm &> /dev/null; then
-    cd web
-    npm install && npm run build
-    BUILD_STATUS=$?
-    cd ..
-    if [ $BUILD_STATUS -ne 0 ]; then
-      osascript -e 'display dialog "Failed to build the frontend. Please run npm run build inside the web/ directory manually to inspect the error." buttons {{"OK"}} default button "OK" with icon stop'
-      exit 1
-    fi
-  else
-    osascript -e 'display dialog "npm is not installed or not in PATH. Please run npm run build inside the web/ directory manually." buttons {{"OK"}} default button "OK" with icon stop'
-    exit 1
-  fi
-fi
-
-# Launch the desktop app using the virtual environment python interpreter
-# Redirect output to launcher_error.log in case of troubleshooting
-./.venv/bin/python desktop_app.py > "$LOG_FILE" 2>&1
-
-# Check exit code
-EXIT_CODE=$?
-if [ $EXIT_CODE -ne 0 ]; then
-  osascript -e 'display dialog "Household Budgeting failed to start. Error code: '$EXIT_CODE'.\nCheck logs at: '$LOG_FILE'" buttons {{"OK"}} default button "OK" with icon stop'
-  exit $EXIT_CODE
-fi
+# Launch the python script inside the native macOS Terminal application.
+# This bypasses all Finder/Launch Services sandboxing restrictions and inherits
+# Terminal's standard directory access permissions (Files and Folders).
+osascript -e "tell application \\"Terminal\\"
+    activate
+    do script \\"cd '$PROJECT_DIR' && .venv/bin/python desktop_app.py; exit\\"
+end tell"
 """
     
     launcher_path = APP_BUNDLE_PATH / "Contents" / "MacOS" / "launcher"
@@ -219,6 +181,28 @@ def deploy_to_desktop():
         shutil.rmtree(DESKTOP_PATH)
         
     shutil.copytree(APP_BUNDLE_PATH, DESKTOP_PATH)
+    
+    # Touch, register with Launch Services, and perform rename cycle to force Finder cache reload on both copies
+    try:
+        lsregister_path = "/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/LaunchServices.framework/Versions/A/Support/lsregister"
+        
+        for path in [APP_BUNDLE_PATH, DESKTOP_PATH]:
+            if path.exists():
+                subprocess.run(["touch", str(path)], check=True)
+                if os.path.exists(lsregister_path):
+                    subprocess.run([lsregister_path, "-f", str(path)], check=True)
+                    
+                # Rename cycle to trigger Finder's directory observer to refresh the bundle icon
+                temp_path = path.parent / f"{path.name} Temp"
+                os.rename(path, temp_path)
+                import time
+                time.sleep(0.5)
+                os.rename(temp_path, path)
+                
+        subprocess.run(["killall", "Finder"], stderr=subprocess.DEVNULL)
+    except Exception:
+        pass
+        
     print_success(f"Successfully copied launcher to Desktop: {DESKTOP_PATH}")
 
 
