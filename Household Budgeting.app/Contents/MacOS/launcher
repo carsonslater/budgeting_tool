@@ -1,0 +1,51 @@
+#!/bin/bash
+
+# Define project path
+PROJECT_DIR="/Users/carson/Documents/R_Projects/budgeting_tool"
+LOG_FILE="$PROJECT_DIR/launcher_error.log"
+
+# Navigate to project directory
+cd "$PROJECT_DIR" || {
+  osascript -e 'display dialog "Could not navigate to project folder '$PROJECT_DIR'." buttons {"OK"} default button "OK" with icon stop'
+  exit 1
+}
+
+# Check if .venv exists
+if [ ! -d ".venv" ]; then
+  osascript -e 'display dialog "Virtual environment (.venv) not found. Please set up the environment before running." buttons {"OK"} default button "OK" with icon stop'
+  exit 1
+fi
+
+# Check if frontend is built, if not, build it
+if [ ! -d "web/dist" ]; then
+  osascript -e 'display dialog "Frontend build not found. Building the React interface (this may take a few seconds)..." buttons {"OK"} default button "OK" with icon note'
+  
+  # Set common path variables to locate npm
+  export PATH="/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH"
+  
+  if command -v npm &> /dev/null; then
+    cd web
+    npm install && npm run build
+    BUILD_STATUS=$?
+    cd ..
+    if [ $BUILD_STATUS -ne 0 ]; then
+      osascript -e 'display dialog "Failed to build the frontend. Please run npm run build inside the web/ directory manually to inspect the error." buttons {"OK"} default button "OK" with icon stop'
+      exit 1
+    fi
+  else
+    osascript -e 'display dialog "npm is not installed or not in PATH. Please run npm run build inside the web/ directory manually." buttons {"OK"} default button "OK" with icon stop'
+    exit 1
+  fi
+fi
+
+# Launch the desktop app using the virtual environment python interpreter
+# Redirect output to launcher_error.log in case of troubleshooting
+./.venv/bin/python desktop_app.py > "$LOG_FILE" 2>&1
+
+# Check exit code
+EXIT_CODE=$?
+if [ $EXIT_CODE -ne 0 ]; then
+  osascript -e 'display dialog "Household Budgeting failed to start. Error code: '$EXIT_CODE'.
+Check logs at: '$LOG_FILE'" buttons {"OK"} default button "OK" with icon stop'
+  exit $EXIT_CODE
+fi
