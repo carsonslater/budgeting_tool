@@ -5,6 +5,7 @@ import { Card } from '../components/ui/Card';
 import { Input } from '../components/ui/Input';
 import { Button } from '../components/ui/Button';
 import { Select } from '../components/ui/Select';
+import { MonthPicker } from '../components/ui/MonthPicker';
 import { useCategories, useSubcategories } from '../hooks/useExpenses';
 import { useBudgets, useBudgetActions, useSuggestedBudgets } from '../hooks/useBudgets';
 import { useIncome, useSetIncome } from '../hooks/useIncome';
@@ -173,19 +174,17 @@ export const Budgets: React.FC = () => {
             {editId ? "Update Budget" : "Add Budget"}
           </h3>
           <form onSubmit={handleSubmit} className={styles.formCard}>
-            <Input
-              type="month"
+            <MonthPicker
               label="Effective Month"
               value={effectiveDate.substring(0, 7)}
-              onChange={(e) => setEffectiveDate(`${e.target.value}-01`)}
+              onChange={(val) => setEffectiveDate(`${val}-01`)}
               required
             />
 
-            <Input
-              type="month"
+            <MonthPicker
               label="Termination Month (Optional)"
               value={conclusionDate}
-              onChange={(e) => setConclusionDate(e.target.value)}
+              onChange={(val) => setConclusionDate(val)}
             />
 
             <Input
