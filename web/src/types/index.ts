@@ -81,7 +81,10 @@ export interface Goal {
   completed: 0 | 1;
 }
 
-export type GoalCreate = Omit<Goal, 'id'>;
+export interface GoalCreate extends Omit<Goal, 'id'> {
+  category?: string;
+  subcategory?: string;
+}
 export type GoalUpdate = Partial<Omit<Goal, 'id'>>;
 
 export interface GoalLink {

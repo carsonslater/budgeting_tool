@@ -5,7 +5,7 @@ import { Card } from '../components/ui/Card';
 import { Input } from '../components/ui/Input';
 import { Button } from '../components/ui/Button';
 import { Badge } from '../components/ui/Badge';
-import { useCategories } from '../hooks/useExpenses';
+import { useCategories, useSubcategories } from '../hooks/useExpenses';
 import { useGoals, useGoalLinks, useGoalActions } from '../hooks/useGoals';
 import { useExpenses } from '../hooks/useExpenses';
 import { useIncome } from '../hooks/useIncome';
@@ -30,7 +30,9 @@ export const Goals: React.FC = () => {
   const nextMonth = startOfMonth(addMonths(new Date(), 1));
   const [name, setName] = useState('');
   const [targetAmount, setTargetAmount] = useState('');
-  const [targetMonth, setTargetMonth] = useState(format(nextMonth, 'yyyy-MM-dd'));
+  const [targetMonth, setTargetMonth] = useState(format(nextMonth, 'yyyy-MM'));
+  const [categoryInput, setCategoryInput] = useState('');
+  const [subcategoryInput, setSubcategoryInput] = useState('');
 
   // UI State
   const [showCompleted, setShowCompleted] = useState(false);
@@ -43,19 +45,40 @@ export const Goals: React.FC = () => {
   const [linkStart, setLinkStart] = useState('');
   const [linkEnd, setLinkEnd] = useState('');
 
+  // Queries
+  const { data: subcategories } = useSubcategories(categoryInput);
+
+  // Robust date normalization helper to ensure we store clean YYYY-MM-01 format
+  const normalizeTargetMonth = (val: string): string => {
+    if (!val) {
+      return format(new Date(), 'yyyy-MM-01');
+    }
+    const parts = val.split('-').filter(Boolean);
+    if (parts.length >= 2) {
+      const year = parts[0];
+      const month = parts[1].padStart(2, '0');
+      return `${year}-${month}-01`;
+    }
+    return val;
+  };
+
   const handleCreateGoal = (e: React.FormEvent) => {
     e.preventDefault();
     create.mutate({
       name,
       target_amount: parseFloat(targetAmount) || 0,
-      target_month: targetMonth,
+      target_month: normalizeTargetMonth(targetMonth),
       completed: 0,
-      created_date: format(new Date(), 'yyyy-MM-dd')
+      created_date: format(new Date(), 'yyyy-MM-dd'),
+      category: categoryInput || undefined,
+      subcategory: subcategoryInput || undefined
     }, {
       onSuccess: () => {
         setName('');
         setTargetAmount('');
-        setTargetMonth(format(nextMonth, 'yyyy-MM-dd'));
+        setTargetMonth(format(nextMonth, 'yyyy-MM'));
+        setCategoryInput('');
+        setSubcategoryInput('');
       }
     });
   };
@@ -153,9 +176,23 @@ export const Goals: React.FC = () => {
             <Input
               label="Target Month"
               type="month"
-              value={targetMonth.substring(0, 7)}
-              onChange={(e) => setTargetMonth(`${e.target.value}-01`)}
+              value={targetMonth}
+              onChange={(e) => setTargetMonth(e.target.value)}
               required
+            />
+            <Input
+              label="Category (Optional)"
+              list="cat-list"
+              value={categoryInput}
+              onChange={(e) => setCategoryInput(e.target.value)}
+              placeholder="e.g. Auto, Gifts, Travel"
+            />
+            <Input
+              label="Subcategory (Optional)"
+              list="goal-subcat-list"
+              value={subcategoryInput}
+              onChange={(e) => setSubcategoryInput(e.target.value)}
+              placeholder="e.g. Maintenance, Baby Shower"
             />
             <Button type="submit" loading={create.isPending}>Save Goal</Button>
           </form>
@@ -219,7 +256,17 @@ export const Goals: React.FC = () => {
                   </div>
 
                   <div className={styles.goalMeta}>
-                    Due: {format(parseISO(g.target_month), 'MMMM yyyy')}
+                    Due: {(() => {
+                      try {
+                        const parsed = parseISO(g.target_month);
+                        if (isNaN(parsed.getTime())) {
+                          return g.target_month;
+                        }
+                        return format(parsed, 'MMMM yyyy');
+                      } catch {
+                        return g.target_month;
+                      }
+                    })()}
                   </div>
 
                   <div className={styles.linkChips}>
@@ -299,11 +346,21 @@ export const Goals: React.FC = () => {
                 {completedGoals.map(g => {
                   const pct = Math.min((g.saved / g.target_amount) * 100, 100);
                   return (
-                    <Card key={g.id} padding="lg">
+                    <Card key={g.id} padding="lg" className={styles.goalCard}>
                       <div className={styles.goalHeader}>
                         <div className={styles.goalTitle}>
                           {g.name}
                           <Badge variant="muted">Completed</Badge>
+                        </div>
+                        <div className={styles.goalActions}>
+                          <Button 
+                            variant="ghost" 
+                            size="sm" 
+                            onClick={(e) => { e.stopPropagation(); setDeleteGoalId(g.id); }} 
+                            style={{ color: 'var(--color-danger)' }}
+                          >
+                            <X size={16} />
+                          </Button>
                         </div>
                       </div>
                       <div className={styles.goalStats}>
@@ -326,6 +383,10 @@ export const Goals: React.FC = () => {
 
       <datalist id="cat-list">
         {categories?.map(c => <option key={c} value={c} />)}
+      </datalist>
+
+      <datalist id="goal-subcat-list">
+        {subcategories?.map(s => <option key={s} value={s} />)}
       </datalist>
 
       {/* Delete Modal */}
