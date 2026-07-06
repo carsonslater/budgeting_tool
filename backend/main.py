@@ -15,7 +15,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from database import init_db
-from routers import expenses, budgets, income, goals, reporting, import_csv
+from routers import expenses, budgets, income, goals, reporting, import_csv, budget_drafts
 
 
 # ── Lifespan ─────────────────────────────────────────────────────────────────
@@ -55,6 +55,7 @@ app.add_middleware(
 # ── Routers ───────────────────────────────────────────────────────────────────
 app.include_router(expenses.router)
 app.include_router(budgets.router)
+app.include_router(budget_drafts.router)
 app.include_router(income.router)
 app.include_router(goals.router)
 app.include_router(reporting.router)

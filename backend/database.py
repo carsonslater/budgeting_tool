@@ -95,6 +95,15 @@ def init_db() -> None:
                 start_date  TEXT    NOT NULL,
                 end_date    TEXT
             );
+
+            CREATE TABLE IF NOT EXISTS budget_drafts (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                target_month    TEXT    NOT NULL,
+                category        TEXT    NOT NULL,
+                subcategory     TEXT    NOT NULL DEFAULT '',
+                limit_amount    REAL    NOT NULL DEFAULT 0,
+                frequency       TEXT    NOT NULL DEFAULT 'Monthly'
+            );
         """)
         conn.commit()
 

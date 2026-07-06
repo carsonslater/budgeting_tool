@@ -40,6 +40,18 @@ export interface Budget {
 export type BudgetCreate = Omit<Budget, 'id'>;
 export type BudgetUpdate = Partial<Omit<Budget, 'id'>>;
 
+export interface BudgetDraft {
+  id: number;
+  target_month: string;
+  category: string;
+  subcategory: string;
+  limit_amount: number;
+  frequency: 'Monthly' | 'Quarterly' | 'Bi-annually' | 'Annually';
+}
+
+export type BudgetDraftCreate = Omit<BudgetDraft, 'id'>;
+export type BudgetDraftUpdate = Partial<Omit<BudgetDraft, 'id' | 'target_month'>>;
+
 export interface SuggestedBudget {
   budget_id: number;
   category: string;
