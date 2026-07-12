@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { format, subMonths, parseISO, startOfMonth, endOfMonth, parse } from 'date-fns';
+import { format, subMonths, parseISO, startOfMonth, endOfMonth, parse, subWeeks } from 'date-fns';
 import { ChevronDown, ChevronUp } from 'lucide-react';
 import {
   LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend
@@ -106,43 +106,64 @@ export const Reporting: React.FC = () => {
   // ── Section 3: Spending Trends (Computed locally for flexibility) ──
   const trendsData = useMemo(() => {
     if (!allExpenses) return { data: [], categories: [] };
+    const now = new Date();
+    const cutoff = trendPeriod === 'monthly' ? subMonths(now, 12) : subWeeks(now, 16);
     
-    const list = allExpenses.filter(e => e.expense_type === 'Monthly');
+    const list = allExpenses.filter(e => 
+      e.expense_type === 'Monthly' && parseISO(e.date) >= cutoff
+    );
     const categoriesSet = new Set<string>();
 
-    const grouped = list.reduce((acc, e) => {
+    const grouped: Record<string, any> = {};
+
+    // Pre-fill the axis to calibrate perfectly to today's date
+    if (trendPeriod === 'monthly') {
+      for (let i = 11; i >= 0; i--) {
+        const d = subMonths(now, i);
+        const name = format(d, 'MMM yyyy');
+        const key = name;
+        const timestamp = new Date(d.getFullYear(), d.getMonth(), 1).getTime();
+        grouped[key] = { name, timestamp, Total: 0 };
+      }
+    } else {
+      for (let i = 15; i >= 0; i--) {
+        const d = subWeeks(now, i);
+        const weekStart = new Date(d);
+        weekStart.setDate(d.getDate() - d.getDay()); // Start of week (Sunday)
+        const name = format(weekStart, 'MMM d');
+        const key = format(weekStart, 'yyyy-MM-dd');
+        const timestamp = weekStart.getTime();
+        grouped[key] = { name, timestamp, Total: 0 };
+      }
+    }
+
+    list.forEach(e => {
       const d = parseISO(e.date);
       let key = '';
+      
       if (trendPeriod === 'monthly') {
         key = format(d, 'MMM yyyy');
       } else {
-        // Simple week string
         const weekStart = new Date(d);
-        weekStart.setDate(d.getDate() - d.getDay()); // Start of week (Sunday)
-        key = format(weekStart, 'MMM d, yy');
+        weekStart.setDate(d.getDate() - d.getDay());
+        key = format(weekStart, 'yyyy-MM-dd');
       }
 
-      if (!acc[key]) acc[key] = { name: key, Total: 0 };
+      // If the expense falls before our 16-week/12-month cutoff, it won't exist in the pre-filled map.
+      // (The cutoff filter above handles this mostly, but edge cases around week starts might slip through).
+      if (!grouped[key]) return;
       
-      acc[key].Total += e.amount;
+      grouped[key].Total += e.amount;
       
       if (trendType === 'category') {
         const cat = e.category || 'Uncategorized';
         categoriesSet.add(cat);
-        acc[key][cat] = (acc[key][cat] || 0) + e.amount;
-      }
-      
-      return acc;
-    }, {} as Record<string, any>);
-
-    // Sort chronologically
-    const sortedData = Object.values(grouped).sort((a, b) => {
-      if (trendPeriod === 'monthly') {
-        return parse(a.name, 'MMM yyyy', new Date()).getTime() - parse(b.name, 'MMM yyyy', new Date()).getTime();
-      } else {
-        return parse(a.name, 'MMM d, yy', new Date()).getTime() - parse(b.name, 'MMM d, yy', new Date()).getTime();
+        grouped[key][cat] = (grouped[key][cat] || 0) + e.amount;
       }
     });
+
+    // Sort chronologically using absolute timestamps
+    const sortedData = Object.values(grouped).sort((a, b) => a.timestamp - b.timestamp);
 
     return { data: sortedData, categories: Array.from(categoriesSet) };
   }, [allExpenses, trendPeriod, trendType]);
