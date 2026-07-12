@@ -119,7 +119,7 @@ export const Reporting: React.FC = () => {
         // Simple week string
         const weekStart = new Date(d);
         weekStart.setDate(d.getDate() - d.getDay()); // Start of week (Sunday)
-        key = format(weekStart, 'MMM d');
+        key = format(weekStart, 'MMM d, yy');
       }
 
       if (!acc[key]) acc[key] = { name: key, Total: 0 };
@@ -135,13 +135,12 @@ export const Reporting: React.FC = () => {
       return acc;
     }, {} as Record<string, any>);
 
-    // Sort chronologically (assuming keys are chronological enough, or we should sort by Date)
-    // To properly sort, we parse the keys back
+    // Sort chronologically
     const sortedData = Object.values(grouped).sort((a, b) => {
       if (trendPeriod === 'monthly') {
         return parse(a.name, 'MMM yyyy', new Date()).getTime() - parse(b.name, 'MMM yyyy', new Date()).getTime();
       } else {
-        return parse(a.name, 'MMM d', new Date()).getTime() - parse(b.name, 'MMM d', new Date()).getTime();
+        return parse(a.name, 'MMM d, yy', new Date()).getTime() - parse(b.name, 'MMM d, yy', new Date()).getTime();
       }
     });
 

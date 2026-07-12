@@ -23,8 +23,7 @@ interface NavItem {
 const NAV_ITEMS: NavItem[] = [
   { to: '/',          label: 'Dashboard', icon: LayoutDashboard, end: true },
   { to: '/expenses',  label: 'Expenses',  icon: Receipt },
-  { to: '/budgets',   label: 'Budgets',   icon: Wallet },
-  { to: '/planning',  label: 'Planning',  icon: BarChart2 },
+  { to: '/planning',  label: 'Planning',  icon: Wallet },
   { to: '/goals',     label: 'Goals',     icon: Target },
   { to: '/reporting', label: 'Reporting', icon: BarChart2 },
   { to: '/settings',  label: 'Settings',  icon: Settings },

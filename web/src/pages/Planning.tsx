@@ -10,7 +10,7 @@ import { useCategories, useSubcategories } from '../hooks/useExpenses';
 import { useBudgetDrafts } from '../hooks/useBudgetDrafts';
 import { useBudgets } from '../hooks/useBudgets';
 import { useToast } from '../contexts/ToastContext';
-import styles from './Budgets.module.css'; // Reuse Budgets styling
+import styles from './Planning.module.css'; // Reuse Budgets styling
 import type { BudgetDraft } from '../types';
 
 function formatCurrency(amount: number) {

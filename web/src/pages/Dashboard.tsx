@@ -76,7 +76,12 @@ export const Dashboard: React.FC = () => {
       return acc;
     }, {} as Record<string, number>);
 
-    const health = budgets?.map((b: Budget) => {
+    const activeBudgets = budgets?.filter(b => 
+      b.effective_date <= currentMonthEnd && 
+      (!b.conclusion_date || b.conclusion_date >= currentMonthStart)
+    ) || [];
+
+    const health = activeBudgets.map((b: Budget) => {
       const spent = categorySpending[`${b.category}|${b.subcategory}`] || 0;
       const limit = getMonthlyLimit(b);
       let status: 'Over' | 'On Track' | 'Under' = 'Under';
@@ -84,7 +89,7 @@ export const Dashboard: React.FC = () => {
       else if (spent >= limit * 0.85) status = 'On Track';
       
       return { ...b, spent, limit, status };
-    }) || [];
+    });
 
     // Sort: Over first, then On Track, then Under
     health.sort((a, b) => {

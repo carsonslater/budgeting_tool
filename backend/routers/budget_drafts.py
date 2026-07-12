@@ -173,6 +173,14 @@ def commit_draft_for_month(target_month: str) -> dict:
                            VALUES (?, ?, ?, ?, ?, NULL)""",
                         (draft["category"], draft["subcategory"], draft["limit_amount"], draft["frequency"], target_month)
                     )
+                    
+                    # Cascade to future drafts
+                    conn.execute(
+                        """UPDATE budget_drafts 
+                           SET limit_amount = ?, frequency = ? 
+                           WHERE target_month > ? AND category = ? AND subcategory = ?""",
+                        (draft["limit_amount"], draft["frequency"], target_month, draft["category"], draft["subcategory"])
+                    )
             else:
                 # No active budget for this category, just insert it
                 conn.execute(
@@ -180,6 +188,21 @@ def commit_draft_for_month(target_month: str) -> dict:
                        VALUES (?, ?, ?, ?, ?, NULL)""",
                     (draft["category"], draft["subcategory"], draft["limit_amount"], draft["frequency"], target_month)
                 )
+                
+                # We should also ensure this new category is in any future drafts
+                future_months = conn.execute("SELECT DISTINCT target_month FROM budget_drafts WHERE target_month > ?", (target_month,)).fetchall()
+                for fm in future_months:
+                    # Check if it exists
+                    exists = conn.execute(
+                        "SELECT 1 FROM budget_drafts WHERE target_month = ? AND category = ? AND subcategory = ?",
+                        (fm["target_month"], draft["category"], draft["subcategory"])
+                    ).fetchone()
+                    if not exists:
+                        conn.execute(
+                            """INSERT INTO budget_drafts (target_month, category, subcategory, limit_amount, frequency)
+                               VALUES (?, ?, ?, ?, ?)""",
+                            (fm["target_month"], draft["category"], draft["subcategory"], draft["limit_amount"], draft["frequency"])
+                        )
 
         # Handle budgets that were active but are missing from the draft (user deleted them from draft)
         draft_keys = set((d["category"], d["subcategory"]) for d in drafts)
@@ -189,6 +212,12 @@ def commit_draft_for_month(target_month: str) -> dict:
                 conn.execute(
                     "UPDATE budgets SET conclusion_date = ? WHERE id = ?",
                     (conclusion_date, active_b["id"])
+                )
+                
+                # Cascade deletion to future drafts
+                conn.execute(
+                    "DELETE FROM budget_drafts WHERE target_month > ? AND category = ? AND subcategory = ?",
+                    (target_month, active_b["category"], active_b["subcategory"])
                 )
 
         # Clear the drafts for this month
