@@ -85,3 +85,7 @@ Thumbs.db
 .Rhistory
 .RData
 .Rproj.user/
+
+# --- Agent Archive ---
+# Superseded agent session logs, kept locally but not tracked.
+.agents/archive/
