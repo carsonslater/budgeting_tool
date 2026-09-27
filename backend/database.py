@@ -59,7 +59,8 @@ def init_db() -> None:
                 subcategory  TEXT    NOT NULL DEFAULT '',
                 amount       REAL    NOT NULL DEFAULT 0,
                 payer        TEXT    NOT NULL DEFAULT '',
-                expense_type TEXT    NOT NULL DEFAULT 'Monthly'
+                expense_type TEXT    NOT NULL DEFAULT 'Monthly',
+                goal_id      INTEGER REFERENCES goals(id) ON DELETE SET NULL
             );
 
             CREATE TABLE IF NOT EXISTS budgets (
@@ -103,6 +104,20 @@ def init_db() -> None:
                 subcategory     TEXT    NOT NULL DEFAULT '',
                 limit_amount    REAL    NOT NULL DEFAULT 0,
                 frequency       TEXT    NOT NULL DEFAULT 'Monthly'
+            );
+
+            -- Sweep rules: controls how surplus is distributed to goals at month-end
+            CREATE TABLE IF NOT EXISTS sweep_rules (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                goal_id         INTEGER NOT NULL REFERENCES goals(id) ON DELETE CASCADE,
+                priority_rank   INTEGER NOT NULL DEFAULT 0,
+                allocation_type TEXT    NOT NULL CHECK(allocation_type IN ('percentage', 'fixed')),
+                amount          REAL    NOT NULL DEFAULT 0
+            );
+
+            -- Closed months ledger: records months that have been swept/finalized
+            CREATE TABLE IF NOT EXISTS closed_months (
+                month_id TEXT PRIMARY KEY  -- YYYY-MM format
             );
         """)
         conn.commit()
