@@ -13,7 +13,7 @@ This application replaces an older R/Shiny monolith with a modern, high-performa
 The application is structured around a high-fidelity user interface and a robust local API server, featuring:
 
 *   **Interactive Dashboard:** A premium high-level financial overview showcasing your current month's total spending vs. monthly income via a beautiful visual arc, live budget health metrics, recent transactions list, and visual goal progress indicators.
-*   **Ledger and Expense Management:** A full-featured transactional interface supporting instant client-side search, multi-column sorting, and pagination. Includes category/subcategory comboboxes, payer attribution (e.g., Caleb, Rae, Joint), and dedicated toggles to link expenses directly to saving goals.
+*   **Ledger and Expense Management:** A full-featured transactional interface supporting instant client-side search, multi-column sorting, and pagination. Includes category/subcategory comboboxes, payer attribution (e.g., Carson, Chloe, Joint), and dedicated toggles to link expenses directly to saving goals.
 *   **Dynamic Budgets Planner:** A robust calendar-aware budget organizer. Set monthly limits per category and subcategory with customizable effective/conclusion dates. Features **Weighted Moving Average (WMA)** recommendations using historical spend patterns with "Hasty" (0.6/0.3/0.1) and "Conservative" (0.4/0.4/0.2) suggestion models.
 *   **Goal Milestones:** Rich visual tracking cards for active and completed savings goals. Links directly to expense items, calculates dynamic completion progress, and supports granular budget-line matching rules.
 *   **Advanced Analytics and Reporting:** Full spending reports including period filters, interactive trend line/bar charts powered by **Recharts**, category breakdown visualizations, and highlighted budget overage tables sorted by worst-performing categories first.
@@ -213,5 +213,3 @@ If you are transitioning from the older R/Shiny version of the application, seed
     python3 backend/migrate.py
     ```
 3.  This script compiles, deduplicates, and populates the tables in `data/budget.db` seamlessly.
-
-

@@ -6,3 +6,6 @@ python-dateutil
 pandas
 thefuzz[speedup]
 pywebview
+
+# Testing (dev-only)
+pytest

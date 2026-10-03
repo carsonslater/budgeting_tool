@@ -29,6 +29,7 @@ router = APIRouter(prefix="/api/import", tags=["import"])
 
 # ── Pydantic models ──────────────────────────────────────────────────────────
 
+
 class StagedRow(BaseModel):
     date: str
     description: str
@@ -46,6 +47,7 @@ class ConfirmImportRequest(BaseModel):
 
 
 # ── Levenshtein distance & fuzzy duplicate check helpers ─────────────────────
+
 
 def _levenshtein_distance(s1: str, s2: str) -> int:
     """Pure Python Levenshtein distance computation."""
@@ -89,6 +91,7 @@ def _is_duplicate(row_date: str, row_desc: str, row_amount: float, conn) -> bool
 
 # ── Format detection & parsing ───────────────────────────────────────────────
 
+
 def _detect_and_parse(content: bytes, filename: str) -> pd.DataFrame:
     """
     Auto-detect the CSV format using exact first-line matching (matching the R app),
@@ -101,66 +104,87 @@ def _detect_and_parse(content: bytes, filename: str) -> pd.DataFrame:
 
     # Exact headers matching R app
     is_credit_card = "Status,Date,Description,Debit,Credit,Member Name" in first_line
-    is_chase = "Transaction Date,Post Date,Description,Category,Type,Amount,Memo" in first_line
+    is_chase = (
+        "Transaction Date,Post Date,Description,Category,Type,Amount,Memo" in first_line
+    )
     is_chase_simple = "Trans. Date,Post Date,Description,Amount,Category" in first_line
-    is_chase_bank = "Details,Posting Date,Description,Amount,Type,Balance,Check or Slip #" in first_line
+    is_chase_bank = (
+        "Details,Posting Date,Description,Amount,Type,Balance,Check or Slip #"
+        in first_line
+    )
 
     # 1. BECU Credit Card
     if is_credit_card:
         df = pd.read_csv(io.StringIO(text))
         df = df[df["Debit"].notna() & (df["Debit"] > 0)]
-        
+
         df["date"] = pd.to_datetime(df["Date"], errors="coerce").dt.strftime("%Y-%m-%d")
         df["description"] = df["Description"].fillna("").astype(str).str.strip()
         df["amount"] = pd.to_numeric(df["Debit"], errors="coerce")
         df["category"] = ""
-        
+
         # Payer detection
         member_name = df["Member Name"].fillna("").astype(str).str.upper()
         df["payer"] = "Joint"
-        df.loc[member_name.str.contains("CALEB", na=False), "payer"] = "Caleb"
-        df.loc[member_name.str.contains("RAE", na=False), "payer"] = "Rae"
-        
-        return df[["date", "description", "amount", "category", "payer"]].dropna(subset=["date", "amount"])
+        df.loc[member_name.str.contains("CARSON", na=False), "payer"] = "Carson"
+        df.loc[member_name.str.contains("CHLOE", na=False), "payer"] = "Chloe"
+
+        return df[["date", "description", "amount", "category", "payer"]].dropna(
+            subset=["date", "amount"]
+        )
 
     # 2. Chase Credit (Type == "Sale" & Amount < 0)
     elif is_chase:
         df = pd.read_csv(io.StringIO(text))
         df = df[(df["Type"] == "Sale") & (df["Amount"].notna()) & (df["Amount"] < 0)]
-        
-        df["date"] = pd.to_datetime(df["Transaction Date"], errors="coerce").dt.strftime("%Y-%m-%d")
+
+        df["date"] = pd.to_datetime(
+            df["Transaction Date"], errors="coerce"
+        ).dt.strftime("%Y-%m-%d")
         df["description"] = df["Description"].fillna("").astype(str).str.strip()
         df["amount"] = pd.to_numeric(df["Amount"], errors="coerce").abs()
         df["category"] = df["Category"].fillna("").astype(str).str.strip()
         df["payer"] = "Joint"
-        
-        return df[["date", "description", "amount", "category", "payer"]].dropna(subset=["date", "amount"])
+
+        return df[["date", "description", "amount", "category", "payer"]].dropna(
+            subset=["date", "amount"]
+        )
 
     # 3. Chase Simple (Amount > 0)
     elif is_chase_simple:
         df = pd.read_csv(io.StringIO(text))
         df = df[df["Amount"].notna() & (df["Amount"] > 0)]
-        
-        df["date"] = pd.to_datetime(df["Trans. Date"], errors="coerce").dt.strftime("%Y-%m-%d")
+
+        df["date"] = pd.to_datetime(df["Trans. Date"], errors="coerce").dt.strftime(
+            "%Y-%m-%d"
+        )
         df["description"] = df["Description"].fillna("").astype(str).str.strip()
         df["amount"] = pd.to_numeric(df["Amount"], errors="coerce")
         df["category"] = df["Category"].fillna("").astype(str).str.strip()
         df["payer"] = "Joint"
-        
-        return df[["date", "description", "amount", "category", "payer"]].dropna(subset=["date", "amount"])
+
+        return df[["date", "description", "amount", "category", "payer"]].dropna(
+            subset=["date", "amount"]
+        )
 
     # 4. Chase Bank checking/saving (Details == "DEBIT" & Amount < 0)
     elif is_chase_bank:
         df = pd.read_csv(io.StringIO(text))
-        df = df[(df["Details"] == "DEBIT") & (df["Amount"].notna()) & (df["Amount"] < 0)]
-        
-        df["date"] = pd.to_datetime(df["Posting Date"], errors="coerce").dt.strftime("%Y-%m-%d")
+        df = df[
+            (df["Details"] == "DEBIT") & (df["Amount"].notna()) & (df["Amount"] < 0)
+        ]
+
+        df["date"] = pd.to_datetime(df["Posting Date"], errors="coerce").dt.strftime(
+            "%Y-%m-%d"
+        )
         df["description"] = df["Description"].fillna("").astype(str).str.strip()
         df["amount"] = pd.to_numeric(df["Amount"], errors="coerce").abs()
         df["category"] = ""
         df["payer"] = "Joint"
-        
-        return df[["date", "description", "amount", "category", "payer"]].dropna(subset=["date", "amount"])
+
+        return df[["date", "description", "amount", "category", "payer"]].dropna(
+            subset=["date", "amount"]
+        )
 
     # 5. R Fallback (No header: X1=Date, X2=Amount < 0, X5=Description)
     try:
@@ -170,7 +194,9 @@ def _detect_and_parse(content: bytes, filename: str) -> pd.DataFrame:
             test_amount = pd.to_numeric(df_no_hdr[1], errors="coerce")
             if test_date.notna().sum() > 0 and test_amount.notna().sum() > 0:
                 df = pd.DataFrame()
-                df["date"] = pd.to_datetime(df_no_hdr[0], errors="coerce").dt.strftime("%Y-%m-%d")
+                df["date"] = pd.to_datetime(df_no_hdr[0], errors="coerce").dt.strftime(
+                    "%Y-%m-%d"
+                )
                 df["amount"] = pd.to_numeric(df_no_hdr[1], errors="coerce")
                 df["description"] = df_no_hdr[4].fillna("").astype(str).str.strip()
                 df["category"] = ""
@@ -202,7 +228,9 @@ def _detect_and_parse(content: bytes, filename: str) -> pd.DataFrame:
         df["category"] = ""
         df["payer"] = "Joint"
         df = df[df["amount"] > 0]
-        return df[["date", "description", "amount", "category", "payer"]].dropna(subset=["date", "amount"])
+        return df[["date", "description", "amount", "category", "payer"]].dropna(
+            subset=["date", "amount"]
+        )
 
     raise HTTPException(
         status_code=422,
@@ -235,6 +263,7 @@ def _auto_categorize(description: str, conn) -> tuple[str, str]:
 
 # ── Routes ───────────────────────────────────────────────────────────────────
 
+
 @router.post("")
 async def stage_import(file: UploadFile = File(...)) -> list[dict]:
     """
@@ -255,11 +284,11 @@ async def stage_import(file: UploadFile = File(...)) -> list[dict]:
     with get_db() as conn:
         for i, row in df.iterrows():
             row_date = str(row["date"]).strip()
-            desc     = str(row["description"]).strip()
-            amount   = float(row["amount"])
+            desc = str(row["description"]).strip()
+            amount = float(row["amount"])
 
             # Map category and payer pre-detected by bank CSV parser, or fall back to defaults
-            csv_cat   = str(row.get("category", "")).strip()
+            csv_cat = str(row.get("category", "")).strip()
             csv_payer = str(row.get("payer", "")).strip()
 
             cat, sub = _auto_categorize(desc, conn)
@@ -277,17 +306,19 @@ async def stage_import(file: UploadFile = File(...)) -> list[dict]:
             else:
                 seen_staged.add(key)
 
-            staged.append({
-                "original_index": int(i),  # type: ignore[arg-type]
-                "date":           row_date,
-                "description":    desc,
-                "amount":         amount,
-                "category":       cat,
-                "subcategory":    sub,
-                "payer":          payer,
-                "expense_type":   "Monthly",
-                "is_duplicate":   dup,
-            })
+            staged.append(
+                {
+                    "original_index": int(i),  # type: ignore[arg-type]
+                    "date": row_date,
+                    "description": desc,
+                    "amount": amount,
+                    "category": cat,
+                    "subcategory": sub,
+                    "payer": payer,
+                    "expense_type": "Monthly",
+                    "is_duplicate": dup,
+                }
+            )
 
     return staged
 
@@ -300,7 +331,7 @@ def confirm_import(body: ConfirmImportRequest) -> dict:
     Returns counts of imported and skipped rows.
     """
     imported = 0
-    skipped  = 0
+    skipped = 0
 
     with get_db() as conn:
         for row in body.rows:
@@ -313,8 +344,15 @@ def confirm_import(body: ConfirmImportRequest) -> dict:
                 """INSERT INTO expenses
                      (date, description, category, subcategory, amount, payer, expense_type)
                    VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                (row.date, row.description, row.category, row.subcategory,
-                 row.amount, row.payer, row.expense_type),
+                (
+                    row.date,
+                    row.description,
+                    row.category,
+                    row.subcategory,
+                    row.amount,
+                    row.payer,
+                    row.expense_type,
+                ),
             )
             imported += 1
 

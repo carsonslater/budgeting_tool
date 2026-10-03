@@ -14,16 +14,39 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from database import init_db
-from routers import expenses, budgets, income, goals, reporting, import_csv, budget_drafts
+from database import get_db, init_db
+from migrations import run_migrations
+from routers import (
+    expenses,
+    budgets,
+    income,
+    goals,
+    reporting,
+    import_csv,
+    budget_drafts,
+)
 
 
 # ── Lifespan ─────────────────────────────────────────────────────────────────
 
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Run DB initialisation on startup."""
+    """
+    Initialise the DB, then bring its schema up to the latest migration.
+
+    `init_db()` only creates tables that are missing — `CREATE TABLE IF NOT
+    EXISTS` skips an existing table, so it can never add a *column*. The
+    versioned runner is what moves an existing database forward.
+    """
     init_db()
+    conn = get_db()
+    try:
+        applied = run_migrations(conn)
+        if applied:
+            print(f"[migrations] applied: {applied}")
+    finally:
+        conn.close()
     yield
 
 
@@ -64,6 +87,7 @@ app.include_router(import_csv.router)
 
 # ── Health check ──────────────────────────────────────────────────────────────
 
+
 @app.get("/healthz", tags=["health"])
 def health() -> dict:
     return {"status": "ok"}
@@ -77,6 +101,7 @@ import subprocess
 from datetime import datetime
 from database import _DB_PATH
 
+
 @app.post("/api/backup", tags=["system"])
 def backup_data() -> dict:
     backups_dir = _DB_PATH.parent.parent / "backups"
@@ -88,6 +113,7 @@ def backup_data() -> dict:
     shutil.copy2(_DB_PATH, dest)
     return {"message": "Backup created", "timestamp": stamp}
 
+
 @app.get("/api/system/last-saved", tags=["system"])
 def get_last_saved() -> dict:
     if not _DB_PATH.exists():
@@ -98,6 +124,7 @@ def get_last_saved() -> dict:
         return {"last_saved": stamp}
     except Exception as e:
         return {"error": str(e)}
+
 
 @app.post("/api/open-data-folder", tags=["system"])
 def open_data_folder() -> dict:
@@ -113,6 +140,7 @@ def open_data_folder() -> dict:
         return {"status": "ok"}
     except Exception as e:
         return {"error": str(e)}
+
 
 # ── Static Files (Frontend) ───────────────────────────────────────────────────
 from fastapi.staticfiles import StaticFiles
