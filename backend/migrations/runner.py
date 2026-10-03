@@ -45,7 +45,9 @@ def pending_migrations(
 def _validate(migrations: Sequence[Migration]) -> None:
     versions = [m.version for m in migrations]
     if versions != sorted(set(versions)):
-        raise ValueError(f"migration versions must be unique and ascending, got {versions}")
+        raise ValueError(
+            f"migration versions must be unique and ascending, got {versions}"
+        )
     if any(v < 1 for v in versions):
         raise ValueError(f"migration versions must be >= 1, got {versions}")
 

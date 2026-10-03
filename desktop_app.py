@@ -15,6 +15,7 @@ import urllib.request
 from contextlib import closing
 from pathlib import Path
 
+
 # --------------------------------------------------------------------
 # Determine the directory where the .exe is located (PyInstaller-safe)
 # --------------------------------------------------------------------
@@ -54,17 +55,19 @@ def launch_fastapi(port: int) -> subprocess.Popen:
     """Start the FastAPI uvicorn process and return the handle."""
     env = os.environ.copy()
     env.update({"PORT": str(port)})
-    
+
     # Run uvicorn main:app from the backend folder so relative imports resolve
     process = subprocess.Popen(
         [sys.executable, "-m", "uvicorn", "main:app", "--port", str(port)],
         env=env,
-        cwd=resource_path("backend")
+        cwd=resource_path("backend"),
     )
     return process
 
 
-def terminate_process(process: subprocess.Popen | None, *, timeout: float = 5.0) -> None:
+def terminate_process(
+    process: subprocess.Popen | None, *, timeout: float = 5.0
+) -> None:
     """Terminate the process gracefully, falling back to kill."""
     if process is None or process.poll() is not None:
         return
@@ -124,11 +127,7 @@ def main(argv: list[str] | None = None) -> int:
             raise
 
     window = webview.create_window(
-        "Household Budgeting", 
-        url,
-        width=1280,
-        height=800,
-        min_size=(1024, 768)
+        "Household Budgeting", url, width=1280, height=800, min_size=(1024, 768)
     )
 
     def on_closed() -> None:

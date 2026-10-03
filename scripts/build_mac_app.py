@@ -32,34 +32,34 @@ def print_error(msg: str):
 
 def create_directory_structure():
     print_step("Creating application bundle directory structure...")
-    
+
     # If the old bundle exists, remove it
     if APP_BUNDLE_PATH.exists():
         shutil.rmtree(APP_BUNDLE_PATH)
-        
+
     # Create structure
     macos_dir = APP_BUNDLE_PATH / "Contents" / "MacOS"
     resources_dir = APP_BUNDLE_PATH / "Contents" / "Resources"
-    
+
     macos_dir.mkdir(parents=True, exist_ok=True)
     resources_dir.mkdir(parents=True, exist_ok=True)
-    
+
     print_success("Created directory structure:")
     print(f"  {APP_BUNDLE_PATH}")
 
 
 def generate_icns():
     print_step("Generating Retina-compatible AppIcon.icns...")
-    
+
     if not SOURCE_ICON_PNG.exists():
         print_error(f"Source PNG not found at {SOURCE_ICON_PNG}")
         sys.exit(1)
-        
+
     iconset_dir = PROJECT_DIR / "AppIcon.iconset"
     if iconset_dir.exists():
         shutil.rmtree(iconset_dir)
     iconset_dir.mkdir(parents=True)
-    
+
     # Define sizes and filenames for the iconset
     icon_sizes = [
         ("16x16", 16),
@@ -71,46 +71,54 @@ def generate_icns():
         ("256x256", 256),
         ("256x256@2x", 512),
         ("512x512", 512),
-        ("512x512@2x", 1024)
+        ("512x512@2x", 1024),
     ]
-    
+
     # Use macOS sips tool to resize the source PNG and ensure true PNG format
     for name, size in icon_sizes:
         dest_png = iconset_dir / f"icon_{name}.png"
         cmd = [
             "sips",
-            "-s", "format", "png",
-            "-z", str(size), str(size),
+            "-s",
+            "format",
+            "png",
+            "-z",
+            str(size),
+            str(size),
             str(SOURCE_ICON_PNG),
-            "--out", str(dest_png)
+            "--out",
+            str(dest_png),
         ]
         result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode != 0:
             print_error(f"sips failed for {name}: {result.stderr}")
-        
+
     # Compile iconset using macOS iconutil directly into the app bundle resources
     icns_dest = APP_BUNDLE_PATH / "Contents" / "Resources" / "AppIcon.icns"
-    result = subprocess.run([
-        "iconutil",
-        "--convert", "icns",
-        "--output", str(icns_dest),
-        str(iconset_dir)
-    ], capture_output=True, text=True)
+    result = subprocess.run(
+        ["iconutil", "--convert", "icns", "--output", str(icns_dest), str(iconset_dir)],
+        capture_output=True,
+        text=True,
+    )
     if result.returncode != 0:
         print_error(f"iconutil failed: {result.stderr}")
-    
+
     # Clean up iconset directory only if successful
     if icns_dest.exists():
         shutil.rmtree(iconset_dir)
-        print_success(f"Successfully compiled AppIcon.icns ({icns_dest.stat().st_size} bytes)")
+        print_success(
+            f"Successfully compiled AppIcon.icns ({icns_dest.stat().st_size} bytes)"
+        )
     else:
-        print_error("Failed to generate AppIcon.icns. Leaving AppIcon.iconset for debugging.")
+        print_error(
+            "Failed to generate AppIcon.icns. Leaving AppIcon.iconset for debugging."
+        )
         sys.exit(1)
 
 
 def write_info_plist():
     print_step("Writing Info.plist configuration...")
-    
+
     plist_content = """<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -151,7 +159,7 @@ def write_info_plist():
 
 def write_launcher_script():
     print_step("Creating robust launcher script...")
-    
+
     launcher_content = f"""#!/bin/bash
 
 # Define project path
@@ -165,10 +173,10 @@ osascript -e "tell application \\"Terminal\\"
     do script \\"cd '$PROJECT_DIR' && .venv/bin/python desktop_app.py; exit\\"
 end tell"
 """
-    
+
     launcher_path = APP_BUNDLE_PATH / "Contents" / "MacOS" / "launcher"
     launcher_path.write_text(launcher_content, encoding="utf-8")
-    
+
     # Make launcher executable
     launcher_path.chmod(0o755)
     print_success("Wrote and permissioned Contents/MacOS/launcher")
@@ -176,33 +184,34 @@ end tell"
 
 def deploy_to_desktop():
     print_step("Deploying Application to Desktop...")
-    
+
     if DESKTOP_PATH.exists():
         shutil.rmtree(DESKTOP_PATH)
-        
+
     shutil.copytree(APP_BUNDLE_PATH, DESKTOP_PATH)
-    
+
     # Touch, register with Launch Services, and perform rename cycle to force Finder cache reload on both copies
     try:
         lsregister_path = "/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/LaunchServices.framework/Versions/A/Support/lsregister"
-        
+
         for path in [APP_BUNDLE_PATH, DESKTOP_PATH]:
             if path.exists():
                 subprocess.run(["touch", str(path)], check=True)
                 if os.path.exists(lsregister_path):
                     subprocess.run([lsregister_path, "-f", str(path)], check=True)
-                    
+
                 # Rename cycle to trigger Finder's directory observer to refresh the bundle icon
                 temp_path = path.parent / f"{path.name} Temp"
                 os.rename(path, temp_path)
                 import time
+
                 time.sleep(0.5)
                 os.rename(temp_path, path)
-                
+
         subprocess.run(["killall", "Finder"], stderr=subprocess.DEVNULL)
     except Exception:
         pass
-        
+
     print_success(f"Successfully copied launcher to Desktop: {DESKTOP_PATH}")
 
 
@@ -213,7 +222,9 @@ def main():
     write_info_plist()
     write_launcher_script()
     deploy_to_desktop()
-    print_success("Application Bundle generated successfully! Double-click 'Household Budgeting' on your Desktop to run.")
+    print_success(
+        "Application Bundle generated successfully! Double-click 'Household Budgeting' on your Desktop to run."
+    )
 
 
 if __name__ == "__main__":

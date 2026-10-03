@@ -35,6 +35,7 @@ def _count(conn: sqlite3.Connection, table: str) -> int:
 # Per-table migration helpers
 # ---------------------------------------------------------------------------
 
+
 def migrate_expenses(conn: sqlite3.Connection) -> int:
     """Map CSV columns → DB columns and insert."""
     if _count(conn, "expenses") > 0:
@@ -71,8 +72,21 @@ def migrate_expenses(conn: sqlite3.Connection) -> int:
     else:
         df["expense_type"] = df["expense_type"].fillna("Monthly")
 
-    rows = df[["date", "description", "category", "subcategory",
-               "amount", "payer", "expense_type"]].dropna(subset=["date"]).to_dict("records")
+    rows = (
+        df[
+            [
+                "date",
+                "description",
+                "category",
+                "subcategory",
+                "amount",
+                "payer",
+                "expense_type",
+            ]
+        ]
+        .dropna(subset=["date"])
+        .to_dict("records")
+    )
 
     conn.executemany(
         """INSERT INTO expenses (date, description, category, subcategory,
@@ -100,28 +114,37 @@ def migrate_budgets(conn: sqlite3.Connection) -> int:
     df.columns = [c.strip() for c in df.columns]
 
     col_map = {
-        "Category":       "category",
-        "Subcategory":    "subcategory",
-        "Limit":          "limit_amount",
-        "Frequency":      "frequency",
-        "EffectiveDate":  "effective_date",
+        "Category": "category",
+        "Subcategory": "subcategory",
+        "Limit": "limit_amount",
+        "Frequency": "frequency",
+        "EffectiveDate": "effective_date",
         "ConclusionDate": "conclusion_date",
     }
     df = df.rename(columns=col_map)
 
     df["subcategory"] = df.get("subcategory", pd.Series(dtype=str)).fillna("")
-    df["frequency"]   = df.get("frequency",   pd.Series(dtype=str)).fillna("Monthly")
+    df["frequency"] = df.get("frequency", pd.Series(dtype=str)).fillna("Monthly")
     # Conclusion date may be blank — store as None
     if "conclusion_date" in df.columns:
         df["conclusion_date"] = df["conclusion_date"].where(
-            df["conclusion_date"].notna() & (df["conclusion_date"].astype(str).str.strip() != ""),
+            df["conclusion_date"].notna()
+            & (df["conclusion_date"].astype(str).str.strip() != ""),
             other=None,
         )
     else:
         df["conclusion_date"] = None
 
-    rows = df[["category", "subcategory", "limit_amount", "frequency",
-               "effective_date", "conclusion_date"]].to_dict("records")
+    rows = df[
+        [
+            "category",
+            "subcategory",
+            "limit_amount",
+            "frequency",
+            "effective_date",
+            "conclusion_date",
+        ]
+    ].to_dict("records")
 
     conn.executemany(
         """INSERT INTO budgets (category, subcategory, limit_amount, frequency,
@@ -174,11 +197,11 @@ def migrate_goals(conn: sqlite3.Connection) -> int:
     df.columns = [c.strip() for c in df.columns]
 
     col_map = {
-        "Goal":          "name",
-        "TargetAmount":  "target_amount",
-        "TargetMonth":   "target_month",
-        "CreatedDate":   "created_date",
-        "Completed":     "completed",
+        "Goal": "name",
+        "TargetAmount": "target_amount",
+        "TargetMonth": "target_month",
+        "CreatedDate": "created_date",
+        "Completed": "completed",
     }
     df = df.rename(columns=col_map)
 
@@ -193,8 +216,9 @@ def migrate_goals(conn: sqlite3.Connection) -> int:
     df["completed"] = df["completed"].apply(_bool_to_int)
     df["created_date"] = df["created_date"].fillna("2020-01-01")
 
-    rows = df[["name", "target_amount", "target_month",
-               "created_date", "completed"]].to_dict("records")
+    rows = df[
+        ["name", "target_amount", "target_month", "created_date", "completed"]
+    ].to_dict("records")
     conn.executemany(
         """INSERT INTO goals (name, target_amount, target_month, created_date, completed)
            VALUES (:name, :target_amount, :target_month, :created_date, :completed)""",
@@ -219,11 +243,11 @@ def migrate_goal_budget_links(conn: sqlite3.Connection) -> int:
     df.columns = [c.strip() for c in df.columns]
 
     col_map = {
-        "GoalName":   "goal_name",
-        "Category":   "category",
-        "Subcategory":"subcategory",
-        "StartDate":  "start_date",
-        "EndDate":    "end_date",
+        "GoalName": "goal_name",
+        "Category": "category",
+        "Subcategory": "subcategory",
+        "StartDate": "start_date",
+        "EndDate": "end_date",
     }
     df = df.rename(columns=col_map)
     df["subcategory"] = df.get("subcategory", pd.Series(dtype=str)).fillna("")
@@ -235,8 +259,9 @@ def migrate_goal_budget_links(conn: sqlite3.Connection) -> int:
     else:
         df["end_date"] = None
 
-    rows = df[["goal_name", "category", "subcategory",
-               "start_date", "end_date"]].to_dict("records")
+    rows = df[
+        ["goal_name", "category", "subcategory", "start_date", "end_date"]
+    ].to_dict("records")
     conn.executemany(
         """INSERT INTO goal_budget_links (goal_name, category, subcategory, start_date, end_date)
            VALUES (:goal_name, :category, :subcategory, :start_date, :end_date)""",
@@ -250,6 +275,7 @@ def migrate_goal_budget_links(conn: sqlite3.Connection) -> int:
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
+
 
 def main() -> None:
     # Ensure DB and tables exist first

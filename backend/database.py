@@ -10,6 +10,7 @@ import sqlite3
 import sys
 from pathlib import Path
 
+
 def get_db_path() -> Path:
     """Resolve the SQLite database path, supporting both development and PyInstaller environments."""
     # Allow explicit override via environment variable

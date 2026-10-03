@@ -98,7 +98,9 @@ def _resolve_month(month_str: Optional[str]) -> tuple[int, int]:
             parts = month_str.split("-")
             return int(parts[0]), int(parts[1])
         except Exception:
-            raise HTTPException(status_code=400, detail="Invalid month format. Expected YYYY-MM")
+            raise HTTPException(
+                status_code=400, detail="Invalid month format. Expected YYYY-MM"
+            )
     today = date.today()
     return today.year, today.month
 
@@ -117,7 +119,7 @@ def _last_day(year: int, month: int) -> date:
 def list_active_categories(
     month: Optional[str] = Query(
         None, description="YYYY-MM, defaults to current month"
-    )
+    ),
 ) -> list[dict]:
     """
     Return active budget lines' category/subcategory/frequency for the specified month.
@@ -142,14 +144,16 @@ def list_active_categories(
 
 @router.get("")
 def list_categories(
-    kind: Optional[str] = Query(None, description="'category' or 'subcategory'")
+    kind: Optional[str] = Query(None, description="'category' or 'subcategory'"),
 ) -> list[dict]:
     """List category surrogate records from the categories table."""
     sql = "SELECT id, name, kind, created_date FROM categories WHERE 1=1"
     params: list = []
     if kind:
         if kind not in ("category", "subcategory"):
-            raise HTTPException(status_code=400, detail="kind must be 'category' or 'subcategory'")
+            raise HTTPException(
+                status_code=400, detail="kind must be 'category' or 'subcategory'"
+            )
         sql += " AND kind = ?"
         params.append(kind)
     sql += " ORDER BY name, kind"

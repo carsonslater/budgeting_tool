@@ -16,6 +16,7 @@ router = APIRouter(prefix="/api/budget-drafts", tags=["budget-drafts"])
 
 # ── Pydantic models ──────────────────────────────────────────────────────────
 
+
 class BudgetDraftCreate(BaseModel):
     target_month: str
     category: str
@@ -23,16 +24,20 @@ class BudgetDraftCreate(BaseModel):
     limit_amount: float = 0.0
     frequency: str = "Monthly"
 
+
 class BudgetDraftUpdate(BaseModel):
     category: Optional[str] = None
     subcategory: Optional[str] = None
     limit_amount: Optional[float] = None
     frequency: Optional[str] = None
 
+
 def _row_to_dict(row) -> dict:
     return dict(row)
 
+
 # ── Endpoints ────────────────────────────────────────────────────────────────
+
 
 @router.get("/{target_month}")
 def get_drafts_for_month(target_month: str) -> list[dict]:
@@ -43,7 +48,7 @@ def get_drafts_for_month(target_month: str) -> list[dict]:
     with get_db() as conn:
         drafts = conn.execute(
             "SELECT * FROM budget_drafts WHERE target_month = ? ORDER BY category, subcategory",
-            (target_month,)
+            (target_month,),
         ).fetchall()
 
         if not drafts:
@@ -54,21 +59,27 @@ def get_drafts_for_month(target_month: str) -> list[dict]:
                    WHERE limit_amount > 0
                      AND effective_date <= ?
                      AND (conclusion_date IS NULL OR conclusion_date >= ?)""",
-                (today, today)
+                (today, today),
             ).fetchall()
-            
+
             for b in active_budgets:
                 conn.execute(
                     """INSERT INTO budget_drafts (target_month, category, subcategory, limit_amount, frequency)
                        VALUES (?, ?, ?, ?, ?)""",
-                    (target_month, b["category"], b["subcategory"], b["limit_amount"], b["frequency"])
+                    (
+                        target_month,
+                        b["category"],
+                        b["subcategory"],
+                        b["limit_amount"],
+                        b["frequency"],
+                    ),
                 )
             conn.commit()
-            
+
             # Fetch again
             drafts = conn.execute(
                 "SELECT * FROM budget_drafts WHERE target_month = ? ORDER BY category, subcategory",
-                (target_month,)
+                (target_month,),
             ).fetchall()
 
     return [_row_to_dict(r) for r in drafts]
@@ -80,10 +91,18 @@ def create_draft_item(body: BudgetDraftCreate) -> dict:
         cur = conn.execute(
             """INSERT INTO budget_drafts (target_month, category, subcategory, limit_amount, frequency)
                VALUES (?, ?, ?, ?, ?)""",
-            (body.target_month, body.category, body.subcategory, body.limit_amount, body.frequency)
+            (
+                body.target_month,
+                body.category,
+                body.subcategory,
+                body.limit_amount,
+                body.frequency,
+            ),
         )
         conn.commit()
-        row = conn.execute("SELECT * FROM budget_drafts WHERE id = ?", (cur.lastrowid,)).fetchone()
+        row = conn.execute(
+            "SELECT * FROM budget_drafts WHERE id = ?", (cur.lastrowid,)
+        ).fetchone()
     return _row_to_dict(row)
 
 
@@ -99,8 +118,10 @@ def update_draft_item(draft_id: int, body: BudgetDraftUpdate) -> dict:
     with get_db() as conn:
         conn.execute(f"UPDATE budget_drafts SET {set_clause} WHERE id = ?", values)
         conn.commit()
-        row = conn.execute("SELECT * FROM budget_drafts WHERE id = ?", (draft_id,)).fetchone()
-        
+        row = conn.execute(
+            "SELECT * FROM budget_drafts WHERE id = ?", (draft_id,)
+        ).fetchone()
+
     if row is None:
         raise HTTPException(status_code=404, detail="Draft item not found")
     return _row_to_dict(row)
@@ -127,23 +148,26 @@ def commit_draft_for_month(target_month: str) -> dict:
         t_month_date = date.fromisoformat(target_month)
         conclusion_date = (t_month_date - timedelta(days=1)).isoformat()
     except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid target_month format. Use YYYY-MM-DD")
+        raise HTTPException(
+            status_code=400, detail="Invalid target_month format. Use YYYY-MM-DD"
+        )
 
     with get_db() as conn:
         # Get all drafts
         drafts = conn.execute(
-            "SELECT * FROM budget_drafts WHERE target_month = ?",
-            (target_month,)
+            "SELECT * FROM budget_drafts WHERE target_month = ?", (target_month,)
         ).fetchall()
-        
+
         if not drafts:
-            raise HTTPException(status_code=400, detail="No draft items found for this month.")
+            raise HTTPException(
+                status_code=400, detail="No draft items found for this month."
+            )
 
         # Get active budgets
         active_budgets = conn.execute(
             """SELECT * FROM budgets 
                WHERE conclusion_date IS NULL OR conclusion_date >= ?""",
-            (conclusion_date,)
+            (conclusion_date,),
         ).fetchall()
 
         # Map active budgets by (category, subcategory) for easy comparison
@@ -156,59 +180,93 @@ def commit_draft_for_month(target_month: str) -> dict:
         for draft in drafts:
             key = (draft["category"], draft["subcategory"])
             active_b = active_map.get(key)
-            
+
             # If there's an active budget, check if it's different.
             if active_b:
-                if (active_b["limit_amount"] != draft["limit_amount"] or
-                    active_b["frequency"] != draft["frequency"]):
-                    
+                if (
+                    active_b["limit_amount"] != draft["limit_amount"]
+                    or active_b["frequency"] != draft["frequency"]
+                ):
                     # Update active budget conclusion date
                     conn.execute(
                         "UPDATE budgets SET conclusion_date = ? WHERE id = ?",
-                        (conclusion_date, active_b["id"])
+                        (conclusion_date, active_b["id"]),
                     )
-                    
+
                     # Insert new budget (with surrogate keys so rename-by-id reaches it)
-                    cat_id, sub_id = resolve_category_ids(conn, draft["category"], draft["subcategory"])
+                    cat_id, sub_id = resolve_category_ids(
+                        conn, draft["category"], draft["subcategory"]
+                    )
                     conn.execute(
                         """INSERT INTO budgets (category, subcategory, limit_amount, frequency, effective_date, conclusion_date,
                                                 category_id, subcategory_id)
                            VALUES (?, ?, ?, ?, ?, NULL, ?, ?)""",
-                        (draft["category"], draft["subcategory"], draft["limit_amount"], draft["frequency"], target_month,
-                         cat_id, sub_id)
+                        (
+                            draft["category"],
+                            draft["subcategory"],
+                            draft["limit_amount"],
+                            draft["frequency"],
+                            target_month,
+                            cat_id,
+                            sub_id,
+                        ),
                     )
-                    
+
                     # Cascade to future drafts
                     conn.execute(
                         """UPDATE budget_drafts 
                            SET limit_amount = ?, frequency = ? 
                            WHERE target_month > ? AND category = ? AND subcategory = ?""",
-                        (draft["limit_amount"], draft["frequency"], target_month, draft["category"], draft["subcategory"])
+                        (
+                            draft["limit_amount"],
+                            draft["frequency"],
+                            target_month,
+                            draft["category"],
+                            draft["subcategory"],
+                        ),
                     )
             else:
                 # No active budget for this category, just insert it
-                cat_id, sub_id = resolve_category_ids(conn, draft["category"], draft["subcategory"])
+                cat_id, sub_id = resolve_category_ids(
+                    conn, draft["category"], draft["subcategory"]
+                )
                 conn.execute(
                     """INSERT INTO budgets (category, subcategory, limit_amount, frequency, effective_date, conclusion_date,
                                             category_id, subcategory_id)
                        VALUES (?, ?, ?, ?, ?, NULL, ?, ?)""",
-                    (draft["category"], draft["subcategory"], draft["limit_amount"], draft["frequency"], target_month,
-                     cat_id, sub_id)
+                    (
+                        draft["category"],
+                        draft["subcategory"],
+                        draft["limit_amount"],
+                        draft["frequency"],
+                        target_month,
+                        cat_id,
+                        sub_id,
+                    ),
                 )
-                
+
                 # We should also ensure this new category is in any future drafts
-                future_months = conn.execute("SELECT DISTINCT target_month FROM budget_drafts WHERE target_month > ?", (target_month,)).fetchall()
+                future_months = conn.execute(
+                    "SELECT DISTINCT target_month FROM budget_drafts WHERE target_month > ?",
+                    (target_month,),
+                ).fetchall()
                 for fm in future_months:
                     # Check if it exists
                     exists = conn.execute(
                         "SELECT 1 FROM budget_drafts WHERE target_month = ? AND category = ? AND subcategory = ?",
-                        (fm["target_month"], draft["category"], draft["subcategory"])
+                        (fm["target_month"], draft["category"], draft["subcategory"]),
                     ).fetchone()
                     if not exists:
                         conn.execute(
                             """INSERT INTO budget_drafts (target_month, category, subcategory, limit_amount, frequency)
                                VALUES (?, ?, ?, ?, ?)""",
-                            (fm["target_month"], draft["category"], draft["subcategory"], draft["limit_amount"], draft["frequency"])
+                            (
+                                fm["target_month"],
+                                draft["category"],
+                                draft["subcategory"],
+                                draft["limit_amount"],
+                                draft["frequency"],
+                            ),
                         )
 
         # Handle budgets that were active but are missing from the draft (user deleted them from draft)
@@ -218,17 +276,19 @@ def commit_draft_for_month(target_month: str) -> dict:
                 # Conclude this budget without creating a new one
                 conn.execute(
                     "UPDATE budgets SET conclusion_date = ? WHERE id = ?",
-                    (conclusion_date, active_b["id"])
+                    (conclusion_date, active_b["id"]),
                 )
-                
+
                 # Cascade deletion to future drafts
                 conn.execute(
                     "DELETE FROM budget_drafts WHERE target_month > ? AND category = ? AND subcategory = ?",
-                    (target_month, active_b["category"], active_b["subcategory"])
+                    (target_month, active_b["category"], active_b["subcategory"]),
                 )
 
         # Clear the drafts for this month
-        conn.execute("DELETE FROM budget_drafts WHERE target_month = ?", (target_month,))
+        conn.execute(
+            "DELETE FROM budget_drafts WHERE target_month = ?", (target_month,)
+        )
         conn.commit()
 
     return {"status": "success", "message": f"Draft committed for {target_month}"}

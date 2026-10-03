@@ -24,6 +24,7 @@ router = APIRouter(prefix="/api/expenses", tags=["expenses"])
 
 # ── Pydantic models ──────────────────────────────────────────────────────────
 
+
 class ExpenseCreate(BaseModel):
     date: str
     description: str = ""
@@ -46,6 +47,7 @@ class ExpenseUpdate(BaseModel):
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
+
 def _row_to_dict(row) -> dict:
     return dict(row)
 
@@ -53,6 +55,7 @@ def _row_to_dict(row) -> dict:
 # ── Routes ───────────────────────────────────────────────────────────────────
 
 # NOTE: static paths must be declared BEFORE the /{id} path to avoid shadowing.
+
 
 @router.get("/categories")
 def list_categories() -> list[str]:
@@ -84,21 +87,23 @@ def list_subcategories(category: Optional[str] = Query(None)) -> list[str]:
         sql_bud += " AND category = ?"
         params_exp.append(category)
         params_bud.append(category)
-        
+
     with get_db() as conn:
         rows_exp = conn.execute(sql_exp, params_exp).fetchall()
         rows_bud = conn.execute(sql_bud, params_bud).fetchall()
-        
-    subs = set([r["subcategory"] for r in rows_exp] + [r["subcategory"] for r in rows_bud])
+
+    subs = set(
+        [r["subcategory"] for r in rows_exp] + [r["subcategory"] for r in rows_bud]
+    )
     return sorted(list(subs))
 
 
 @router.get("")
 def list_expenses(
     start: Optional[str] = Query(None, description="ISO date YYYY-MM-DD"),
-    end:   Optional[str] = Query(None, description="ISO date YYYY-MM-DD"),
+    end: Optional[str] = Query(None, description="ISO date YYYY-MM-DD"),
     category: Optional[str] = Query(None),
-    payer:    Optional[str] = Query(None),
+    payer: Optional[str] = Query(None),
 ) -> list[dict]:
     sql = "SELECT * FROM expenses WHERE 1=1"
     params: list = []
@@ -129,8 +134,17 @@ def create_expense(body: ExpenseCreate) -> dict:
             """INSERT INTO expenses (date, description, category, subcategory,
                                      amount, payer, expense_type, category_id, subcategory_id)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (body.date, body.description, body.category, body.subcategory,
-             body.amount, body.payer, body.expense_type, cat_id, sub_id),
+            (
+                body.date,
+                body.description,
+                body.category,
+                body.subcategory,
+                body.amount,
+                body.payer,
+                body.expense_type,
+                cat_id,
+                sub_id,
+            ),
         )
         conn.commit()
         row = conn.execute(
@@ -163,9 +177,7 @@ def update_expense(expense_id: int, body: ExpenseUpdate) -> dict:
 
         set_clause = ", ".join(f"{k} = ?" for k in updates)
         values = list(updates.values()) + [expense_id]
-        conn.execute(
-            f"UPDATE expenses SET {set_clause} WHERE id = ?", values
-        )
+        conn.execute(f"UPDATE expenses SET {set_clause} WHERE id = ?", values)
         conn.commit()
         row = conn.execute(
             "SELECT * FROM expenses WHERE id = ?", (expense_id,)
@@ -179,9 +191,7 @@ def update_expense(expense_id: int, body: ExpenseUpdate) -> dict:
 @router.delete("/{expense_id}", status_code=204)
 def delete_expense(expense_id: int) -> None:
     with get_db() as conn:
-        result = conn.execute(
-            "DELETE FROM expenses WHERE id = ?", (expense_id,)
-        )
+        result = conn.execute("DELETE FROM expenses WHERE id = ?", (expense_id,))
         conn.commit()
     if result.rowcount == 0:
         raise HTTPException(status_code=404, detail="Expense not found")

@@ -49,6 +49,7 @@ def client(db_path):
 
 # ── Active categories endpoint ────────────────────────────────────────────────
 
+
 def test_active_categories(client, db_path):
     """GET /api/categories/active only returns budget lines active in the target month."""
     with database.get_db() as conn:
@@ -72,6 +73,7 @@ def test_active_categories(client, db_path):
 
 
 # ── resolve_category_ids helper ───────────────────────────────────────────────
+
 
 def test_resolve_category_ids_creates_and_returns(db_path):
     """resolve_category_ids inserts missing rows and returns consistent ids."""
@@ -107,17 +109,21 @@ def test_resolve_category_ids_empty_strings(db_path):
 
 # ── Expense create / update carry surrogate ids ───────────────────────────────
 
+
 def test_create_expense_carries_category_id(client, db_path):
     """POST /api/expenses writes category_id and subcategory_id on new rows."""
-    resp = client.post("/api/expenses", json={
-        "date": "2025-03-01",
-        "description": "Test purchase",
-        "category": "Food",
-        "subcategory": "Groceries",
-        "amount": 50.0,
-        "payer": "Joint",
-        "expense_type": "Monthly",
-    })
+    resp = client.post(
+        "/api/expenses",
+        json={
+            "date": "2025-03-01",
+            "description": "Test purchase",
+            "category": "Food",
+            "subcategory": "Groceries",
+            "amount": 50.0,
+            "payer": "Joint",
+            "expense_type": "Monthly",
+        },
+    )
     assert resp.status_code == 201
 
     with database.get_db() as conn:
@@ -132,21 +138,27 @@ def test_create_expense_carries_category_id(client, db_path):
 
 def test_update_expense_refreshes_category_id(client, db_path):
     """PATCH /api/expenses/{id} updates *_id when category changes."""
-    create_resp = client.post("/api/expenses", json={
-        "date": "2025-03-01",
-        "description": "Store visit",
-        "category": "Food",
-        "subcategory": "Groceries",
-        "amount": 30.0,
-        "payer": "Joint",
-        "expense_type": "Monthly",
-    })
+    create_resp = client.post(
+        "/api/expenses",
+        json={
+            "date": "2025-03-01",
+            "description": "Store visit",
+            "category": "Food",
+            "subcategory": "Groceries",
+            "amount": 30.0,
+            "payer": "Joint",
+            "expense_type": "Monthly",
+        },
+    )
     expense_id = create_resp.json()["id"]
 
-    patch_resp = client.patch(f"/api/expenses/{expense_id}", json={
-        "category": "Dining",
-        "subcategory": "Restaurants",
-    })
+    patch_resp = client.patch(
+        f"/api/expenses/{expense_id}",
+        json={
+            "category": "Dining",
+            "subcategory": "Restaurants",
+        },
+    )
     assert patch_resp.status_code == 200
 
     with database.get_db() as conn:
@@ -174,21 +186,25 @@ def test_update_expense_refreshes_category_id(client, db_path):
 
 # ── Rename is safe and does NOT clobber user edits ───────────────────────────
 
+
 def test_rename_by_id_after_create_preserves_attribution(client, db_path):
     """
     Regression: create an expense via POST (id set), rename its category by id,
     assert the expense string is updated.  This traverses the create path where
     the original bug lived.
     """
-    create_resp = client.post("/api/expenses", json={
-        "date": "2025-03-01",
-        "description": "Safeway run",
-        "category": "Food",
-        "subcategory": "Groceries",
-        "amount": 75.0,
-        "payer": "Joint",
-        "expense_type": "Monthly",
-    })
+    create_resp = client.post(
+        "/api/expenses",
+        json={
+            "date": "2025-03-01",
+            "description": "Safeway run",
+            "category": "Food",
+            "subcategory": "Groceries",
+            "amount": 75.0,
+            "payer": "Joint",
+            "expense_type": "Monthly",
+        },
+    )
     assert create_resp.status_code == 201
     expense_id = create_resp.json()["id"]
 
@@ -219,15 +235,18 @@ def test_rename_does_not_clobber_user_edit(client, db_path):
     the old row).  Renaming the old category must NOT overwrite the user's string.
     """
     # Create expense with "Food"
-    create_resp = client.post("/api/expenses", json={
-        "date": "2025-04-01",
-        "description": "Mystery purchase",
-        "category": "Food",
-        "subcategory": "Groceries",
-        "amount": 25.0,
-        "payer": "Joint",
-        "expense_type": "Monthly",
-    })
+    create_resp = client.post(
+        "/api/expenses",
+        json={
+            "date": "2025-04-01",
+            "description": "Mystery purchase",
+            "category": "Food",
+            "subcategory": "Groceries",
+            "amount": 25.0,
+            "payer": "Joint",
+            "expense_type": "Monthly",
+        },
+    )
     expense_id = create_resp.json()["id"]
 
     with database.get_db() as conn:
@@ -248,7 +267,9 @@ def test_rename_does_not_clobber_user_edit(client, db_path):
         conn.commit()
 
     # Now rename the original category_id ("Food") to "Eating Out"
-    rename_resp = client.patch(f"/api/categories/{original_cat_id}", json={"name": "Eating Out"})
+    rename_resp = client.patch(
+        f"/api/categories/{original_cat_id}", json={"name": "Eating Out"}
+    )
     assert rename_resp.status_code == 200
 
     # The user's string ("Dining") must be untouched
@@ -262,6 +283,7 @@ def test_rename_does_not_clobber_user_edit(client, db_path):
 
 
 # ── Import confirm carries surrogate ids ─────────────────────────────────────
+
 
 def test_import_confirm_carries_category_id(client, db_path):
     """POST /api/import/confirm sets category_id and subcategory_id on imported rows."""
@@ -294,6 +316,7 @@ def test_import_confirm_carries_category_id(client, db_path):
 
 
 # ── _auto_categorize uses expense descriptions only ──────────────────────────
+
 
 def test_auto_categorize_expense_descriptions_only(db_path):
     """_auto_categorize returns a match when an expense description exists for an active budget line."""
@@ -352,18 +375,22 @@ def test_auto_categorize_inactive_budget_excluded(db_path):
 
 # ── list_categories endpoint ──────────────────────────────────────────────────
 
+
 def test_list_categories(client, db_path):
     """GET /api/categories returns records backfilled by migration or created via write paths."""
     # Creating an expense through the API triggers resolve_category_ids
-    client.post("/api/expenses", json={
-        "date": "2025-03-01",
-        "description": "Groceries",
-        "category": "Food",
-        "subcategory": "Groceries",
-        "amount": 50.0,
-        "payer": "Joint",
-        "expense_type": "Monthly",
-    })
+    client.post(
+        "/api/expenses",
+        json={
+            "date": "2025-03-01",
+            "description": "Groceries",
+            "category": "Food",
+            "subcategory": "Groceries",
+            "amount": 50.0,
+            "payer": "Joint",
+            "expense_type": "Monthly",
+        },
+    )
 
     resp = client.get("/api/categories?kind=category")
     assert resp.status_code == 200
