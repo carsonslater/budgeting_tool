@@ -100,8 +100,8 @@ export type GoalLinkCreate = Omit<GoalLink, 'id'>;
 
 // ── Reporting ─────────────────────────────────────────────────────────────────
 
-/** One row from GET /api/reporting/summary */
-export interface ReportSummary {
+/** One budget line in GET /api/reporting/summary (either partition). */
+export interface ReportSummaryRow {
   budget_id: number;
   category: string;
   subcategory: string;
@@ -110,6 +110,22 @@ export interface ReportSummary {
   remaining: number;
   status: 'Over' | 'On Track' | 'Under' | 'No Budget';
   frequency: string;
+}
+
+/** A non-monthly line also carries the window it applies over. */
+export interface NonMonthlySummaryRow extends ReportSummaryRow {
+  effective_date: string;      // ISO YYYY-MM-DD
+  conclusion_date: string | null;
+}
+
+/**
+ * The partitioned body of GET /api/reporting/summary.
+ * `monthly` holds only Monthly lines; `non_monthly` holds the rest, each
+ * compared to its own per-occurrence limit (never pro-rated).
+ */
+export interface ReportSummary {
+  monthly: ReportSummaryRow[];
+  non_monthly: NonMonthlySummaryRow[];
 }
 
 /** One point from GET /api/reporting/trends */

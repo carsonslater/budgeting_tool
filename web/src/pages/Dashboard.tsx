@@ -3,12 +3,11 @@ import { startOfMonth, endOfMonth, subMonths, format, parseISO } from 'date-fns'
 import { Card } from '../components/ui/Card';
 import { Badge } from '../components/ui/Badge';
 import { useExpenses } from '../hooks/useExpenses';
-import { useBudgets } from '../hooks/useBudgets';
 import { useIncome } from '../hooks/useIncome';
 import { useGoals, useGoalLinks } from '../hooks/useGoals';
+import { useReportSummary } from '../hooks/useReporting';
 import { useCountUp } from '../hooks/useCountUp';
 import styles from './Dashboard.module.css';
-import type { Budget } from '../types';
 
 function formatCurrency(amount: number) {
   return new Intl.NumberFormat('en-US', {
@@ -17,23 +16,18 @@ function formatCurrency(amount: number) {
   }).format(amount);
 }
 
-function getMonthlyLimit(b: Budget) {
-  switch (b.frequency) {
-    case 'Quarterly': return b.limit_amount / 3;
-    case 'Bi-annually': return b.limit_amount / 6;
-    case 'Annually': return b.limit_amount / 12;
-    default: return b.limit_amount;
-  }
-}
-
 export const Dashboard: React.FC = () => {
   const { data: allExpenses, isLoading: loadingExpenses } = useExpenses();
   const { data: incomeData, isLoading: loadingIncome } = useIncome();
-  const { data: budgets, isLoading: loadingBudgets } = useBudgets();
   const { data: goals, isLoading: loadingGoals } = useGoals();
   const { data: goalLinks, isLoading: loadingLinks } = useGoalLinks();
 
-  const isLoading = loadingExpenses || loadingIncome || loadingBudgets || loadingGoals || loadingLinks;
+  // Budget health comes from the server partition so the Dashboard and the
+  // Reporting page cannot disagree about a line's status.
+  const currentMonth = format(new Date(), 'yyyy-MM');
+  const { data: summary, isLoading: loadingSummary } = useReportSummary(currentMonth);
+
+  const isLoading = loadingExpenses || loadingIncome || loadingGoals || loadingLinks || loadingSummary;
 
   const {
     totalSpentThisMonth,
@@ -69,33 +63,24 @@ export const Dashboard: React.FC = () => {
     const pct = spentLast === 0 ? 0 : ((spentThis - spentLast) / spentLast) * 100;
     const arcPct = income === 0 ? 0 : Math.min(spentThis / income, 1);
 
-    // Budget Health
-    const categorySpending = expensesThisMonth.reduce((acc, exp) => {
-      const key = `${exp.category}|${exp.subcategory}`;
-      acc[key] = (acc[key] || 0) + exp.amount;
-      return acc;
-    }, {} as Record<string, number>);
-
-    const activeBudgets = budgets?.filter(b => 
-      b.effective_date <= currentMonthEnd && 
-      (!b.conclusion_date || b.conclusion_date >= currentMonthStart)
-    ) || [];
-
-    const health = activeBudgets.map((b: Budget) => {
-      const spent = categorySpending[`${b.category}|${b.subcategory}`] || 0;
-      const limit = getMonthlyLimit(b);
-      let status: 'Over' | 'On Track' | 'Under' = 'Under';
-      if (spent > limit) status = 'Over';
-      else if (spent >= limit * 0.85) status = 'On Track';
-      
-      return { ...b, spent, limit, status };
-    });
+    // Budget Health — server-partitioned: only Monthly lines are present, so a
+    // non-monthly line can never move a recurring line's status.
+    const health = (summary?.monthly ?? []).map((row) => ({
+      id: row.budget_id,
+      category: row.category,
+      subcategory: row.subcategory,
+      spent: row.spent,
+      limit: row.budget,
+      status: row.status,
+    }));
 
     // Sort: Over first, then On Track, then Under
     health.sort((a, b) => {
-      const rank = { 'Over': 0, 'On Track': 1, 'Under': 2 };
+      const rank = { 'Over': 0, 'On Track': 1, 'Under': 2, 'No Budget': 3 } as const;
       if (rank[a.status] !== rank[b.status]) return rank[a.status] - rank[b.status];
-      return (b.spent / b.limit) - (a.spent / a.limit); // desc by % spent
+      const aPct = a.limit === 0 ? 0 : a.spent / a.limit;
+      const bPct = b.limit === 0 ? 0 : b.spent / b.limit;
+      return bPct - aPct; // desc by % spent
     });
 
     const oCount = health.filter(b => b.status === 'Over').length;
@@ -111,9 +96,9 @@ export const Dashboard: React.FC = () => {
     const gProgress = goals?.filter(g => g.completed === 0).map(g => {
       const links = goalLinks?.filter(l => l.goal_name === g.name) || [];
       const saved = allExpenses?.reduce((sum, e) => {
-        const matchesLink = links.some(l => 
-          l.category === e.category && 
-          l.subcategory === e.subcategory && 
+        const matchesLink = links.some(l =>
+          l.category === e.category &&
+          l.subcategory === e.subcategory &&
           (!l.start_date || e.date >= l.start_date) &&
           (!l.end_date || e.date <= l.end_date)
         );
@@ -137,7 +122,7 @@ export const Dashboard: React.FC = () => {
       recentExpenses: recent,
       goalsProgress: gProgress
     };
-  }, [allExpenses, incomeData, budgets, goals, goalLinks, isLoading]);
+  }, [allExpenses, incomeData, summary, goals, goalLinks, isLoading]);
 
   const animatedSpent = useCountUp(totalSpentThisMonth || 0, 1000);
   const animatedIncome = useCountUp(totalIncome || 0, 1000);
@@ -170,9 +155,9 @@ export const Dashboard: React.FC = () => {
           <div className={styles.arcContainer}>
             <svg className={styles.arcSvg} viewBox="0 0 250 125">
               <path className={styles.arcBackground} d="M 25 125 A 100 100 0 0 1 225 125" />
-              <path 
-                className={`${styles.arcForeground} ${spendPct >= 1 ? styles.over : ''}`} 
-                d="M 25 125 A 100 100 0 0 1 225 125" 
+              <path
+                className={`${styles.arcForeground} ${spendPct >= 1 ? styles.over : ''}`}
+                d="M 25 125 A 100 100 0 0 1 225 125"
                 style={{ strokeDasharray: arcLength, strokeDashoffset: arcOffset }}
               />
             </svg>
@@ -188,7 +173,7 @@ export const Dashboard: React.FC = () => {
           <div className={styles.heroLabel}>Monthly Income</div>
           <div className={styles.statValue}>{formatCurrency(animatedIncome)}</div>
         </Card>
-        
+
         <Card hoverable padding="lg">
           <div className={styles.heroLabel}>Net (Income - Spend)</div>
           <div className={`${styles.statValue} ${netIncome >= 0 ? styles.success : styles.danger}`}>
@@ -277,9 +262,9 @@ export const Dashboard: React.FC = () => {
                     <div className={styles.goalTarget}>{formatCurrency(g.target_amount)}</div>
                   </div>
                   <div className={styles.progressBarContainer}>
-                    <div 
-                      className={`${styles.progressBarFill} ${pct >= 100 ? styles.complete : ''}`} 
-                      style={{ width: `${pct}%` }} 
+                    <div
+                      className={`${styles.progressBarFill} ${pct >= 100 ? styles.complete : ''}`}
+                      style={{ width: `${pct}%` }}
                     />
                   </div>
                   <div className={styles.goalMeta}>

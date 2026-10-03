@@ -41,7 +41,7 @@ const CustomTooltip = ({ active, payload, label }: any) => {
 export const Reporting: React.FC = () => {
   // Period Selection
   const [period, setPeriod] = useState<string>('current'); // 'current', 'all', or 'YYYY-MM'
-  
+
   const monthOptions = useMemo(() => {
     const opts = [{ value: 'all', label: 'All Time' }];
     const now = new Date();
@@ -70,13 +70,20 @@ export const Reporting: React.FC = () => {
   const [txSortCol, setTxSortCol] = useState<keyof Expense>('date');
   const [txSortDesc, setTxSortDesc] = useState(true);
 
-  // ── Section 1: Budget Performance ──
+  // ── Section 1: Budget Performance (monthly lines only) ──
   const sortedSummary = useMemo(() => {
     if (!summary) return [];
-    const list = [...summary];
+    const list = [...summary.monthly];
     // Sort worst first: remaining ascending (most negative first)
     list.sort((a, b) => a.remaining - b.remaining);
     return list;
+  }, [summary]);
+
+  // Non-monthly lines: reported by the server on their own basis, kept out of
+  // the monthly performance table so they cannot distort it.
+  const nonMonthlyLines = useMemo(() => {
+    if (!summary) return [];
+    return [...summary.non_monthly].sort((a, b) => a.remaining - b.remaining);
   }, [summary]);
 
   const totalBudget = sortedSummary.reduce((sum, s) => sum + s.budget, 0);
@@ -97,7 +104,7 @@ export const Reporting: React.FC = () => {
       acc[goal].count += 1;
       return acc;
     }, {} as Record<string, { spent: number, count: number }>);
-    
+
     return Object.entries(grouped)
       .map(([goal, data]) => ({ goal, ...data }))
       .sort((a, b) => b.spent - a.spent);
@@ -106,7 +113,7 @@ export const Reporting: React.FC = () => {
   // ── Section 3: Spending Trends (Computed locally for flexibility) ──
   const trendsData = useMemo(() => {
     if (!allExpenses) return { data: [], categories: [] };
-    
+
     const list = allExpenses.filter(e => e.expense_type === 'Monthly');
     const categoriesSet = new Set<string>();
 
@@ -123,15 +130,15 @@ export const Reporting: React.FC = () => {
       }
 
       if (!acc[key]) acc[key] = { name: key, Total: 0 };
-      
+
       acc[key].Total += e.amount;
-      
+
       if (trendType === 'category') {
         const cat = e.category || 'Uncategorized';
         categoriesSet.add(cat);
         acc[key][cat] = (acc[key][cat] || 0) + e.amount;
       }
-      
+
       return acc;
     }, {} as Record<string, any>);
 
@@ -259,6 +266,53 @@ export const Reporting: React.FC = () => {
         </div>
       </Card>
 
+      {/* Section 1b: Non-Monthly Lines (quarterly / bi-annual / annual) */}
+      {nonMonthlyLines.length > 0 && (
+        <Card title="Non-Monthly Lines" padding="md">
+          <div style={{ marginBottom: '0.75rem', fontSize: '0.85rem', color: 'var(--color-text-muted)' }}>
+            Each line is compared to its own per-period budget — never pro-rated onto a single month.
+          </div>
+          <div className={styles.tableContainer} style={{ maxHeight: '400px' }}>
+            <table className={styles.table}>
+              <thead>
+                <tr>
+                  <th>Category</th>
+                  <th>Subcategory</th>
+                  <th>Frequency</th>
+                  <th className={styles.amountCell}>Budget / period</th>
+                  <th className={styles.amountCell}>Spent</th>
+                  <th className={styles.amountCell}>Remaining</th>
+                  <th>Status</th>
+                  <th>Window</th>
+                </tr>
+              </thead>
+              <tbody>
+                {nonMonthlyLines.map((s, i) => (
+                  <tr key={i} className={s.status === 'Over' ? styles.rowOver : ''}>
+                    <td>{s.category}</td>
+                    <td>{s.subcategory}</td>
+                    <td>{s.frequency}</td>
+                    <td className={styles.amountCell}>{formatCurrency(s.budget)}</td>
+                    <td className={styles.amountCell}>{formatCurrency(s.spent)}</td>
+                    <td className={styles.amountCell} style={{ color: s.remaining < 0 ? 'var(--color-danger)' : 'inherit' }}>
+                      {formatCurrency(s.remaining)}
+                    </td>
+                    <td>
+                      <Badge variant={s.status === 'Over' ? 'danger' : (s.status === 'On Track' ? 'accent' : 'muted')}>
+                        {s.status}
+                      </Badge>
+                    </td>
+                    <td style={{ fontSize: '0.85rem', color: 'var(--color-text-muted)' }}>
+                      {format(parseISO(s.effective_date), 'MMM d, yyyy')} → {s.conclusion_date ? format(parseISO(s.conclusion_date), 'MMM d, yyyy') : 'open'}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Card>
+      )}
+
       <div className={styles.row}>
         {/* Section 3: Spending Trends */}
         <div className={styles.col2}>
@@ -281,7 +335,7 @@ export const Reporting: React.FC = () => {
                 </label>
               </div>
             </div>
-            
+
             <div className={styles.chartContainer}>
               <ResponsiveContainer width="100%" height="100%">
                 {trendType === 'total' ? (
@@ -365,22 +419,22 @@ export const Reporting: React.FC = () => {
             <thead>
               <tr>
                 <th onClick={() => handleTxSort('date')} style={{ cursor: 'pointer' }}>
-                  Date {txSortCol === 'date' && (txSortDesc ? <ChevronDown size={14} style={{ verticalAlign: 'middle' }}/> : <ChevronUp size={14} style={{ verticalAlign: 'middle' }}/>)}
+                  Date {txSortCol === 'date' && (txSortDesc ? <ChevronDown size={14} style={{ verticalAlign: 'middle' }} /> : <ChevronUp size={14} style={{ verticalAlign: 'middle' }} />)}
                 </th>
                 <th onClick={() => handleTxSort('description')} style={{ cursor: 'pointer' }}>
-                  Description {txSortCol === 'description' && (txSortDesc ? <ChevronDown size={14} style={{ verticalAlign: 'middle' }}/> : <ChevronUp size={14} style={{ verticalAlign: 'middle' }}/>)}
+                  Description {txSortCol === 'description' && (txSortDesc ? <ChevronDown size={14} style={{ verticalAlign: 'middle' }} /> : <ChevronUp size={14} style={{ verticalAlign: 'middle' }} />)}
                 </th>
                 <th onClick={() => handleTxSort('category')} style={{ cursor: 'pointer' }}>
-                  Category {txSortCol === 'category' && (txSortDesc ? <ChevronDown size={14} style={{ verticalAlign: 'middle' }}/> : <ChevronUp size={14} style={{ verticalAlign: 'middle' }}/>)}
+                  Category {txSortCol === 'category' && (txSortDesc ? <ChevronDown size={14} style={{ verticalAlign: 'middle' }} /> : <ChevronUp size={14} style={{ verticalAlign: 'middle' }} />)}
                 </th>
                 <th onClick={() => handleTxSort('subcategory')} style={{ cursor: 'pointer' }}>
-                  Subcategory {txSortCol === 'subcategory' && (txSortDesc ? <ChevronDown size={14} style={{ verticalAlign: 'middle' }}/> : <ChevronUp size={14} style={{ verticalAlign: 'middle' }}/>)}
+                  Subcategory {txSortCol === 'subcategory' && (txSortDesc ? <ChevronDown size={14} style={{ verticalAlign: 'middle' }} /> : <ChevronUp size={14} style={{ verticalAlign: 'middle' }} />)}
                 </th>
                 <th onClick={() => handleTxSort('amount')} className={styles.amountCell} style={{ cursor: 'pointer' }}>
-                  Amount {txSortCol === 'amount' && (txSortDesc ? <ChevronDown size={14} style={{ verticalAlign: 'middle' }}/> : <ChevronUp size={14} style={{ verticalAlign: 'middle' }}/>)}
+                  Amount {txSortCol === 'amount' && (txSortDesc ? <ChevronDown size={14} style={{ verticalAlign: 'middle' }} /> : <ChevronUp size={14} style={{ verticalAlign: 'middle' }} />)}
                 </th>
                 <th onClick={() => handleTxSort('expense_type')} style={{ cursor: 'pointer' }}>
-                  Type {txSortCol === 'expense_type' && (txSortDesc ? <ChevronDown size={14} style={{ verticalAlign: 'middle' }}/> : <ChevronUp size={14} style={{ verticalAlign: 'middle' }}/>)}
+                  Type {txSortCol === 'expense_type' && (txSortDesc ? <ChevronDown size={14} style={{ verticalAlign: 'middle' }} /> : <ChevronUp size={14} style={{ verticalAlign: 'middle' }} />)}
                 </th>
               </tr>
             </thead>

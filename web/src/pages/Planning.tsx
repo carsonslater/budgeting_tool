@@ -12,6 +12,7 @@ import { useBudgets } from '../hooks/useBudgets';
 import { useToast } from '../contexts/ToastContext';
 import styles from './Planning.module.css'; // Reuse Budgets styling
 import type { BudgetDraft } from '../types';
+import { monthlyEquivalent } from '../lib/budgetMath';
 
 function formatCurrency(amount: number) {
   return new Intl.NumberFormat('en-US', {
@@ -20,18 +21,9 @@ function formatCurrency(amount: number) {
   }).format(amount);
 }
 
-function getMonthlyEquivalent(limit: number, frequency: string) {
-  switch (frequency) {
-    case 'Quarterly': return limit / 3;
-    case 'Bi-annually': return limit / 6;
-    case 'Annually': return limit / 12;
-    default: return limit;
-  }
-}
-
 export const Planning: React.FC = () => {
   const { showToast } = useToast();
-  
+
   // Start with next month
   const [targetMonth, setTargetMonth] = useState(format(startOfMonth(addMonths(new Date(), 1)), 'yyyy-MM-dd'));
 
@@ -57,7 +49,7 @@ export const Planning: React.FC = () => {
     const today = format(new Date(), 'yyyy-MM-dd');
     for (const b of activeBudgets) {
       if (b.effective_date <= today && (!b.conclusion_date || b.conclusion_date >= today)) {
-        map.set(`${b.category}|${b.subcategory}`, getMonthlyEquivalent(b.limit_amount, b.frequency));
+        map.set(`${b.category}|${b.subcategory}`, monthlyEquivalent(b.limit_amount, b.frequency));
       }
     }
     return map;
@@ -122,7 +114,7 @@ export const Planning: React.FC = () => {
     }
   };
 
-  const totalMonthlyBudgeted = drafts.reduce((sum, b) => sum + getMonthlyEquivalent(b.limit_amount, b.frequency), 0);
+  const totalMonthlyBudgeted = drafts.reduce((sum, b) => sum + monthlyEquivalent(b.limit_amount, b.frequency), 0);
 
   return (
     <div className={styles.container}>
@@ -149,7 +141,7 @@ export const Planning: React.FC = () => {
               onChange={(e) => setCategory(e.target.value)}
               required
             />
-            
+
             <Input
               label="Subcategory"
               list="subcategories-list"
@@ -206,7 +198,7 @@ export const Planning: React.FC = () => {
 
       {/* Main Area */}
       <div className={styles.mainArea}>
-        
+
         {/* Summary Row */}
         <div className={styles.summaryRow}>
           <div className={styles.summaryItem} style={{ flex: 2 }}>
@@ -260,7 +252,7 @@ export const Planning: React.FC = () => {
                   <tr><td colSpan={6} style={{ textAlign: 'center', padding: '1rem' }}>No drafts.</td></tr>
                 ) : (
                   drafts.map(d => {
-                    const equiv = getMonthlyEquivalent(d.limit_amount, d.frequency);
+                    const equiv = monthlyEquivalent(d.limit_amount, d.frequency);
                     const activeEquiv = activeBudgetMap.get(`${d.category}|${d.subcategory}`) || 0;
                     const diff = equiv - activeEquiv;
 

@@ -22,12 +22,14 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
+from budget_math import monthly_equivalent
 from database import get_db
 
 router = APIRouter(prefix="/api/budgets", tags=["budgets"])
 
 
 # ── Pydantic models ──────────────────────────────────────────────────────────
+
 
 class BudgetCreate(BaseModel):
     category: str
@@ -49,22 +51,13 @@ class BudgetUpdate(BaseModel):
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
+
 def _row_to_dict(row) -> dict:
     return dict(row)
 
 
-def _monthly_equivalent(limit: float, freq: str) -> float:
-    """Convert a budget limit to its monthly equivalent."""
-    divisors = {
-        "Monthly": 1,
-        "Quarterly": 3,
-        "Bi-annually": 6,
-        "Annually": 12,
-    }
-    return round(limit / divisors.get(freq, 1), 2)
-
-
 # ── Static routes first (before /{id}) ──────────────────────────────────────
+
 
 @router.get("/suggested")
 def get_suggested_budgets() -> list[dict]:
@@ -82,7 +75,7 @@ def get_suggested_budgets() -> list[dict]:
         month_starts.append(d.isoformat())
     # month_starts[0] = most recent completed month, [2] = oldest
 
-    hasty_weights        = [0.6, 0.3, 0.1]
+    hasty_weights = [0.6, 0.3, 0.1]
     conservative_weights = [0.4, 0.4, 0.2]
 
     with get_db() as conn:
@@ -100,13 +93,17 @@ def get_suggested_budgets() -> list[dict]:
         for budget in active:
             cat = budget["category"]
             sub = budget["subcategory"]
-            current_limit = _monthly_equivalent(budget["limit_amount"], budget["frequency"])
+            current_limit = monthly_equivalent(
+                budget["limit_amount"], budget["frequency"]
+            )
 
             # Spending per month for the last 3 months
             monthly_spent: list[float] = []
             for month_start in month_starts:
                 month_date = date.fromisoformat(month_start)
-                last_day = (month_date.replace(day=28) + timedelta(days=4)).replace(day=1) - timedelta(days=1)
+                last_day = (month_date.replace(day=28) + timedelta(days=4)).replace(
+                    day=1
+                ) - timedelta(days=1)
                 row = conn.execute(
                     """SELECT COALESCE(SUM(amount), 0) as total
                        FROM expenses
@@ -132,22 +129,25 @@ def get_suggested_budgets() -> list[dict]:
                 sum(w * s for w, s in zip(conservative_weights, monthly_spent)), 2
             )
 
-            suggestions.append({
-                "budget_id":              budget["id"],
-                "category":               cat,
-                "subcategory":            sub,
-                "current_limit":          budget["limit_amount"],
-                "current_monthly_equiv":  current_limit,
-                "frequency":              budget["frequency"],
-                "hasty":                  hasty_suggestion,
-                "conservative":           conservative_suggestion,
-                "recent_month_spent":     monthly_spent[0],
-            })
+            suggestions.append(
+                {
+                    "budget_id": budget["id"],
+                    "category": cat,
+                    "subcategory": sub,
+                    "current_limit": budget["limit_amount"],
+                    "current_monthly_equiv": current_limit,
+                    "frequency": budget["frequency"],
+                    "hasty": hasty_suggestion,
+                    "conservative": conservative_suggestion,
+                    "recent_month_spent": monthly_spent[0],
+                }
+            )
 
     return suggestions
 
 
 # ── CRUD ─────────────────────────────────────────────────────────────────────
+
 
 @router.get("")
 def list_budgets() -> list[dict]:
@@ -165,8 +165,14 @@ def create_budget(body: BudgetCreate) -> dict:
             """INSERT INTO budgets
                  (category, subcategory, limit_amount, frequency, effective_date, conclusion_date)
                VALUES (?, ?, ?, ?, ?, ?)""",
-            (body.category, body.subcategory, body.limit_amount,
-             body.frequency, body.effective_date, body.conclusion_date),
+            (
+                body.category,
+                body.subcategory,
+                body.limit_amount,
+                body.frequency,
+                body.effective_date,
+                body.conclusion_date,
+            ),
         )
         conn.commit()
         row = conn.execute(
@@ -185,9 +191,7 @@ def update_budget(budget_id: int, body: BudgetUpdate) -> dict:
     values = list(updates.values()) + [budget_id]
 
     with get_db() as conn:
-        conn.execute(
-            f"UPDATE budgets SET {set_clause} WHERE id = ?", values
-        )
+        conn.execute(f"UPDATE budgets SET {set_clause} WHERE id = ?", values)
         conn.commit()
         row = conn.execute(
             "SELECT * FROM budgets WHERE id = ?", (budget_id,)
@@ -201,9 +205,7 @@ def update_budget(budget_id: int, body: BudgetUpdate) -> dict:
 @router.delete("/{budget_id}", status_code=204)
 def delete_budget(budget_id: int) -> None:
     with get_db() as conn:
-        result = conn.execute(
-            "DELETE FROM budgets WHERE id = ?", (budget_id,)
-        )
+        result = conn.execute("DELETE FROM budgets WHERE id = ?", (budget_id,))
         conn.commit()
     if result.rowcount == 0:
         raise HTTPException(status_code=404, detail="Budget not found")

@@ -2,9 +2,15 @@
 routers/reporting.py — Spending analytics endpoints.
 
 Routes:
-    GET /api/reporting/summary    budget vs actual by category for a month
+    GET /api/reporting/summary    budget vs actual, partitioned by cadence
     GET /api/reporting/trends     monthly or weekly spending totals
     GET /api/reporting/categories spending by category for a date range
+
+Partitioning (Phase 1): `/summary` returns `{ monthly, non_monthly }` rather than
+one blended list. A non-monthly line is reported against its own per-occurrence
+limit with no ÷-by-cadence pro-rating, so an annual or quarterly line can never
+distort a recurring monthly line's status, totals, or remaining budget. Trends
+stay *true cash flow* — a once-a-year spike is real and should remain visible.
 """
 
 from __future__ import annotations
@@ -13,9 +19,13 @@ from datetime import date, timedelta
 from typing import Optional
 from fastapi import APIRouter, Query
 
+from budget_math import monthly_equivalent
 from database import get_db
 
 router = APIRouter(prefix="/api/reporting", tags=["reporting"])
+
+# A monthly line at or above this share of its limit counts as "On Track".
+_ON_TRACK_RATIO = 0.85
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -38,9 +48,28 @@ def _month_bounds(month_str: Optional[str]) -> tuple[str, str]:
     return first.isoformat(), last.isoformat()
 
 
-def _monthly_equivalent(limit: float, freq: str) -> float:
-    divisors = {"Monthly": 1, "Quarterly": 3, "Bi-annually": 6, "Annually": 12}
-    return round(limit / divisors.get(freq, 1), 2)
+def _status(spent: float, limit: float) -> str:
+    """Budget status for a line compared against its own limit."""
+    if limit <= 0:
+        return "No Budget"
+    if spent > limit:
+        return "Over"
+    if spent >= limit * _ON_TRACK_RATIO:
+        return "On Track"
+    return "Under"
+
+
+def _spent_in_month(conn, category: str, subcategory: str, first: str, last: str) -> float:
+    """Actual 'Monthly'-type spend for one category line within a month."""
+    row = conn.execute(
+        """SELECT COALESCE(SUM(amount), 0) AS spent
+           FROM expenses
+           WHERE category = ? AND subcategory = ?
+             AND date >= ? AND date <= ?
+             AND expense_type = 'Monthly'""",
+        (category, subcategory, first, last),
+    ).fetchone()
+    return row["spent"]
 
 
 # ── Routes ───────────────────────────────────────────────────────────────────
@@ -48,10 +77,20 @@ def _monthly_equivalent(limit: float, freq: str) -> float:
 @router.get("/summary")
 def budget_summary(
     month: Optional[str] = Query(None, description="YYYY-MM, defaults to current month"),
-) -> list[dict]:
+) -> dict:
     """
-    Budget vs actual spending by category+subcategory for a given month.
-    Returns every active budget line with its actual spend.
+    Budget vs actual spending for a given month, partitioned by cadence.
+
+    Returns `{ "monthly": [...], "non_monthly": [...] }`:
+
+    - `monthly` — only `frequency == 'Monthly'` lines, each compared to its
+      limit (monthly equivalent == its own limit). This is the monthly budget
+      health view.
+    - `non_monthly` — quarterly / bi-annual / annual lines, each compared to its
+      **per-occurrence** limit with no pro-rating, and carrying its window
+      (`effective_date` → `conclusion_date`) so the basis is visible.
+
+    The explicit partition means the client cannot silently re-mix the two.
     """
     first, last = _month_bounds(month)
 
@@ -66,44 +105,41 @@ def budget_summary(
             (last, first),
         ).fetchall()
 
-        results = []
+        monthly: list[dict] = []
+        non_monthly: list[dict] = []
+
         for b in budgets:
-            cat = b["category"]
-            sub = b["subcategory"]
-            monthly_limit = _monthly_equivalent(b["limit_amount"], b["frequency"])
+            spent = _spent_in_month(conn, b["category"], b["subcategory"], first, last)
 
-            row = conn.execute(
-                """SELECT COALESCE(SUM(amount), 0) as spent
-                   FROM expenses
-                   WHERE category = ? AND subcategory = ?
-                     AND date >= ? AND date <= ?
-                     AND expense_type = 'Monthly'""",
-                (cat, sub, first, last),
-            ).fetchone()
-            spent = row["spent"]
-
-            remaining = round(monthly_limit - spent, 2)
-            if monthly_limit == 0:
-                status = "No Budget"
-            elif spent > monthly_limit:
-                status = "Over"
-            elif spent >= monthly_limit * 0.85:
-                status = "On Track"
+            if b["frequency"] == "Monthly":
+                limit = monthly_equivalent(b["limit_amount"], b["frequency"])
+                monthly.append({
+                    "budget_id":   b["id"],
+                    "category":    b["category"],
+                    "subcategory": b["subcategory"],
+                    "budget":      limit,
+                    "spent":       round(spent, 2),
+                    "remaining":   round(limit - spent, 2),
+                    "status":      _status(spent, limit),
+                    "frequency":   b["frequency"],
+                })
             else:
-                status = "Under"
+                # Own basis: per-occurrence limit, no ÷-by-cadence, no accrual.
+                limit = round(b["limit_amount"], 2)
+                non_monthly.append({
+                    "budget_id":       b["id"],
+                    "category":        b["category"],
+                    "subcategory":     b["subcategory"],
+                    "budget":          limit,
+                    "spent":           round(spent, 2),
+                    "remaining":       round(limit - spent, 2),
+                    "status":          _status(spent, limit),
+                    "frequency":       b["frequency"],
+                    "effective_date":  b["effective_date"],
+                    "conclusion_date": b["conclusion_date"],
+                })
 
-            results.append({
-                "budget_id":    b["id"],
-                "category":     cat,
-                "subcategory":  sub,
-                "budget":       monthly_limit,
-                "spent":        round(spent, 2),
-                "remaining":    remaining,
-                "status":       status,
-                "frequency":    b["frequency"],
-            })
-
-    return results
+    return {"monthly": monthly, "non_monthly": non_monthly}
 
 
 @router.get("/trends")
@@ -113,8 +149,8 @@ def spending_trends(
     months:   int           = Query(12, description="How many months of history"),
 ) -> list[dict]:
     """
-    Aggregated spending over time. Returns a list of {period, total} or
-    {period, category, total} when by_category is True.
+    Aggregated spending over time — true cash flow. Returns a list of
+    {period, total} or {period, category, total} when by_category is True.
     """
     today = date.today()
     # Start date: N months ago
