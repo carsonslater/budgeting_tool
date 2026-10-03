@@ -254,16 +254,29 @@ def migrate_goal_budget_links(conn: sqlite3.Connection) -> int:
 def main() -> None:
     # Ensure DB and tables exist first
     from database import init_db  # noqa: relative import works when run as module
+    from migrations import run_migrations
+    from migrations.m0002_category_identity import backfill_ids, backfill_names
+
     init_db()
 
     print("\n── Migration ───────────────────────────────────────────")
     conn = _get_conn()
+    # Bring the schema up to date first so the `categories` table and the
+    # `*_id` columns exist before we insert — a bare `init_db()` only creates
+    # the legacy tables and would leave a fresh import without them.
+    run_migrations(conn)
     total = 0
     total += migrate_expenses(conn)
     total += migrate_budgets(conn)
     total += migrate_income(conn)
     total += migrate_goals(conn)
     total += migrate_goal_budget_links(conn)
+    # These inserts carry only the legacy string columns. Resolve their
+    # surrogate keys the same way migration 2 does, so imported rows are
+    # rename-safe even if this script is the last thing to touch the DB.
+    backfill_names(conn)
+    backfill_ids(conn)
+    conn.commit()
     conn.close()
     print(f"────────────────────────────────────────────────────────")
     print(f"  Total rows inserted: {total}\n")

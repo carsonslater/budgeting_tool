@@ -10,6 +10,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from database import get_db
+from routers.categories import resolve_category_ids
 
 router = APIRouter(prefix="/api/budget-drafts", tags=["budget-drafts"])
 
@@ -167,11 +168,14 @@ def commit_draft_for_month(target_month: str) -> dict:
                         (conclusion_date, active_b["id"])
                     )
                     
-                    # Insert new budget
+                    # Insert new budget (with surrogate keys so rename-by-id reaches it)
+                    cat_id, sub_id = resolve_category_ids(conn, draft["category"], draft["subcategory"])
                     conn.execute(
-                        """INSERT INTO budgets (category, subcategory, limit_amount, frequency, effective_date, conclusion_date)
-                           VALUES (?, ?, ?, ?, ?, NULL)""",
-                        (draft["category"], draft["subcategory"], draft["limit_amount"], draft["frequency"], target_month)
+                        """INSERT INTO budgets (category, subcategory, limit_amount, frequency, effective_date, conclusion_date,
+                                                category_id, subcategory_id)
+                           VALUES (?, ?, ?, ?, ?, NULL, ?, ?)""",
+                        (draft["category"], draft["subcategory"], draft["limit_amount"], draft["frequency"], target_month,
+                         cat_id, sub_id)
                     )
                     
                     # Cascade to future drafts
@@ -183,10 +187,13 @@ def commit_draft_for_month(target_month: str) -> dict:
                     )
             else:
                 # No active budget for this category, just insert it
+                cat_id, sub_id = resolve_category_ids(conn, draft["category"], draft["subcategory"])
                 conn.execute(
-                    """INSERT INTO budgets (category, subcategory, limit_amount, frequency, effective_date, conclusion_date)
-                       VALUES (?, ?, ?, ?, ?, NULL)""",
-                    (draft["category"], draft["subcategory"], draft["limit_amount"], draft["frequency"], target_month)
+                    """INSERT INTO budgets (category, subcategory, limit_amount, frequency, effective_date, conclusion_date,
+                                            category_id, subcategory_id)
+                       VALUES (?, ?, ?, ?, ?, NULL, ?, ?)""",
+                    (draft["category"], draft["subcategory"], draft["limit_amount"], draft["frequency"], target_month,
+                     cat_id, sub_id)
                 )
                 
                 # We should also ensure this new category is in any future drafts

@@ -14,6 +14,7 @@ Phase 2 acceptance criteria & feature tests (plan §5 & §9, "Category agility")
 The database is built on a temp path, never `data/budget.db`.
 """
 
+import sqlite3
 import sys
 from pathlib import Path
 
@@ -368,3 +369,165 @@ def test_list_categories(client, db_path):
     assert resp.status_code == 200
     names = [c["name"] for c in resp.json()]
     assert "Food" in names
+
+
+# ── Goal-created budget lines carry surrogate ids ────────────────────────────
+
+
+def test_goal_create_budget_line_carries_category_ids(client, db_path):
+    """
+    POST /api/goals with a category mints the `categories` row and stamps
+    `category_id` / `subcategory_id` on the synthetic budget line, so a
+    rename-by-id reaches it.
+    """
+    resp = client.post(
+        "/api/goals",
+        json={
+            "name": "Vacation",
+            "target_amount": 1200.0,
+            "target_month": "2026-06-01",
+            "created_date": "2026-01-15",
+            "category": "Travel",
+            "subcategory": "Flights",
+        },
+    )
+    assert resp.status_code == 201
+
+    with database.get_db() as conn:
+        b = conn.execute(
+            "SELECT category, category_id, subcategory_id FROM budgets"
+        ).fetchone()
+        cat_row = conn.execute(
+            "SELECT id FROM categories WHERE name = 'Travel' AND kind = 'category'"
+        ).fetchone()
+
+    assert b["category"] == "Travel"
+    assert cat_row is not None, "goal creation did not mint the 'Travel' category row"
+    assert b["category_id"] == cat_row["id"]
+    assert b["subcategory_id"] is not None
+
+    # Renaming the category by id must reach the goal-created budget line
+    rename = client.patch(
+        f"/api/categories/{b['category_id']}", json={"name": "Travel & Leisure"}
+    )
+    assert rename.status_code == 200
+    with database.get_db() as conn:
+        after = conn.execute("SELECT category FROM budgets").fetchone()
+    assert after["category"] == "Travel & Leisure"
+
+
+def test_goal_link_budget_line_carries_category_ids(client, db_path):
+    """POST /api/goals/links stamps surrogate ids on its budget line."""
+    client.post(
+        "/api/goals",
+        json={
+            "name": "Car",
+            "target_amount": 6000.0,
+            "target_month": "2026-12-01",
+            "created_date": "2026-01-01",
+        },
+    )
+    resp = client.post(
+        "/api/goals/links",
+        json={
+            "goal_name": "Car",
+            "category": "Auto",
+            "subcategory": "Repairs",
+            "start_date": "2026-02-01",
+        },
+    )
+    assert resp.status_code == 201
+
+    with database.get_db() as conn:
+        b = conn.execute(
+            "SELECT category_id, subcategory_id FROM budgets WHERE category = 'Auto'"
+        ).fetchone()
+    assert b is not None
+    assert b["category_id"] is not None
+    assert b["subcategory_id"] is not None
+
+
+# ── Draft-commit budget lines carry surrogate ids ────────────────────────────
+
+
+def test_draft_commit_budget_lines_carry_category_ids(client, db_path):
+    """Committing a draft month stamps surrogate ids on the budgets it creates."""
+    with database.get_db() as conn:
+        conn.execute(
+            """INSERT INTO budgets (category, subcategory, limit_amount, frequency, effective_date)
+               VALUES ('Food', 'Groceries', 500, 'Monthly', '2020-01-01')"""
+        )
+        conn.commit()
+
+    # One draft that changes an existing line, one that adds a brand-new line.
+    client.post(
+        "/api/budget-drafts",
+        json={
+            "target_month": "2026-07-01",
+            "category": "Food",
+            "subcategory": "Groceries",
+            "limit_amount": 650.0,
+            "frequency": "Monthly",
+        },
+    )
+    client.post(
+        "/api/budget-drafts",
+        json={
+            "target_month": "2026-07-01",
+            "category": "Pets",
+            "subcategory": "Vet",
+            "limit_amount": 100.0,
+            "frequency": "Monthly",
+        },
+    )
+
+    resp = client.post("/api/budget-drafts/2026-07-01/commit")
+    assert resp.status_code == 200
+
+    with database.get_db() as conn:
+        new_rows = conn.execute(
+            """SELECT category, category_id, subcategory_id FROM budgets
+               WHERE effective_date = '2026-07-01'"""
+        ).fetchall()
+
+    assert {r["category"] for r in new_rows} == {"Food", "Pets"}
+    assert all(r["category_id"] is not None for r in new_rows)
+    assert all(r["subcategory_id"] is not None for r in new_rows)
+
+
+# ── Legacy CSV importer stamps surrogate ids ─────────────────────────────────
+
+
+def test_migrate_script_stamps_category_ids(tmp_path, monkeypatch):
+    """migrate.py must resolve surrogate keys for the rows it imports."""
+    import migrate
+
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    db_file = data_dir / "budget.db"
+
+    monkeypatch.setattr(migrate, "_DATA_DIR", data_dir)
+    monkeypatch.setattr(migrate, "_DB_PATH", db_file)
+    monkeypatch.setattr(database, "_DB_PATH", db_file)
+
+    (data_dir / "expenses.csv").write_text(
+        "Date,Description,Category,Subcategory,Amount,Payer,ExpenseType\n"
+        "2025-01-01,Store,Food,Groceries,10.0,Joint,Monthly\n"
+    )
+    (data_dir / "category_budget.csv").write_text(
+        "Category,Subcategory,Limit,Frequency,EffectiveDate,ConclusionDate\n"
+        "Food,Groceries,500,Monthly,2025-01-01,\n"
+    )
+
+    migrate.main()
+
+    conn = sqlite3.connect(str(db_file))
+    conn.row_factory = sqlite3.Row
+    try:
+        e = conn.execute("SELECT category_id, subcategory_id FROM expenses").fetchone()
+        b = conn.execute("SELECT category_id, subcategory_id FROM budgets").fetchone()
+    finally:
+        conn.close()
+
+    assert e["category_id"] is not None and e["subcategory_id"] is not None
+    assert b["category_id"] is not None and b["subcategory_id"] is not None

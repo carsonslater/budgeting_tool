@@ -20,6 +20,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from database import get_db
+from routers.categories import resolve_category_ids
 
 router = APIRouter(prefix="/api/goals", tags=["goals"])
 
@@ -104,12 +105,15 @@ def create_goal_link(body: GoalLinkCreate) -> dict:
              body.start_date, conclusion_date),
         )
         
-        # Insert budget line
+        # Insert budget line (with surrogate keys so rename-by-id reaches it)
+        cat_id, sub_id = resolve_category_ids(conn, body.category, body.subcategory)
         conn.execute(
             """INSERT INTO budgets
-                 (category, subcategory, limit_amount, frequency, effective_date, conclusion_date)
-               VALUES (?, ?, ?, 'Monthly', ?, ?)""",
-            (body.category, body.subcategory, limit_amount, body.start_date, conclusion_date)
+                 (category, subcategory, limit_amount, frequency, effective_date, conclusion_date,
+                  category_id, subcategory_id)
+               VALUES (?, ?, ?, 'Monthly', ?, ?, ?, ?)""",
+            (body.category, body.subcategory, limit_amount, body.start_date, conclusion_date,
+             cat_id, sub_id)
         )
         
         conn.commit()
@@ -200,12 +204,15 @@ def create_goal(body: GoalCreate) -> dict:
                 (body.name, body.category, body.subcategory, start_date_normalized, conclusion_date)
             )
             
-            # Create budget line
+            # Create budget line (with surrogate keys so rename-by-id reaches it)
+            cat_id, sub_id = resolve_category_ids(conn, body.category, body.subcategory)
             conn.execute(
                 """INSERT INTO budgets
-                     (category, subcategory, limit_amount, frequency, effective_date, conclusion_date)
-                   VALUES (?, ?, ?, 'Monthly', ?, ?)""",
-                (body.category, body.subcategory, limit_amount, start_date_normalized, conclusion_date)
+                     (category, subcategory, limit_amount, frequency, effective_date, conclusion_date,
+                      category_id, subcategory_id)
+                   VALUES (?, ?, ?, 'Monthly', ?, ?, ?, ?)""",
+                (body.category, body.subcategory, limit_amount, start_date_normalized, conclusion_date,
+                 cat_id, sub_id)
             )
 
         conn.commit()
