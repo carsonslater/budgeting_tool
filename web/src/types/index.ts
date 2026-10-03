@@ -112,16 +112,17 @@ export interface ReportSummaryRow {
   frequency: string;
 }
 
-/** A non-monthly line also carries the window it applies over. */
+/** A non-monthly line also carries the calendar period it accrues over. */
 export interface NonMonthlySummaryRow extends ReportSummaryRow {
-  effective_date: string;      // ISO YYYY-MM-DD
-  conclusion_date: string | null;
+  period_start: string;   // ISO YYYY-MM-DD — start of the calendar period
+  period_end: string;     // ISO YYYY-MM-DD — end of the calendar period
 }
 
 /**
  * The partitioned body of GET /api/reporting/summary.
  * `monthly` holds only Monthly lines; `non_monthly` holds the rest, each
- * compared to its own per-occurrence limit (never pro-rated).
+ * accruing spend across its calendar period and compared to the full
+ * per-period limit.
  */
 export interface ReportSummary {
   monthly: ReportSummaryRow[];

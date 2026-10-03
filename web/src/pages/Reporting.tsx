@@ -79,8 +79,8 @@ export const Reporting: React.FC = () => {
     return list;
   }, [summary]);
 
-  // Non-monthly lines: reported by the server on their own basis, kept out of
-  // the monthly performance table so they cannot distort it.
+  // Non-monthly lines: spend accrues across each line's calendar period and is
+  // kept out of the monthly performance table so it cannot distort it.
   const nonMonthlyLines = useMemo(() => {
     if (!summary) return [];
     return [...summary.non_monthly].sort((a, b) => a.remaining - b.remaining);
@@ -270,7 +270,7 @@ export const Reporting: React.FC = () => {
       {nonMonthlyLines.length > 0 && (
         <Card title="Non-Monthly Lines" padding="md">
           <div style={{ marginBottom: '0.75rem', fontSize: '0.85rem', color: 'var(--color-text-muted)' }}>
-            Each line is compared to its own per-period budget — never pro-rated onto a single month.
+            Spend accrues across each line's calendar period and is compared to the full per-period budget.
           </div>
           <div className={styles.tableContainer} style={{ maxHeight: '400px' }}>
             <table className={styles.table}>
@@ -280,10 +280,10 @@ export const Reporting: React.FC = () => {
                   <th>Subcategory</th>
                   <th>Frequency</th>
                   <th className={styles.amountCell}>Budget / period</th>
-                  <th className={styles.amountCell}>Spent</th>
+                  <th className={styles.amountCell}>Spent in period</th>
                   <th className={styles.amountCell}>Remaining</th>
                   <th>Status</th>
-                  <th>Window</th>
+                  <th>Period</th>
                 </tr>
               </thead>
               <tbody>
@@ -303,7 +303,7 @@ export const Reporting: React.FC = () => {
                       </Badge>
                     </td>
                     <td style={{ fontSize: '0.85rem', color: 'var(--color-text-muted)' }}>
-                      {format(parseISO(s.effective_date), 'MMM d, yyyy')} → {s.conclusion_date ? format(parseISO(s.conclusion_date), 'MMM d, yyyy') : 'open'}
+                      {format(parseISO(s.period_start), 'MMM d, yyyy')} → {format(parseISO(s.period_end), 'MMM d, yyyy')}
                     </td>
                   </tr>
                 ))}
