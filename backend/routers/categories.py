@@ -4,8 +4,18 @@ routers/categories.py — Category identity and active category querying.
 Routes:
     GET   /api/categories/active    active budget lines' category/subcategory/frequency for a month
     GET   /api/categories           list all category surrogate records
-    POST  /api/categories           create a category surrogate record
     PATCH /api/categories/{id}      rename a category surrogate record (dual-writes legacy string columns)
+
+Internal API
+~~~~~~~~~~~~
+`resolve_category_ids(conn, category, subcategory)` is exported for use by every
+write path (expenses, budgets, import confirm).  It returns `(category_id,
+subcategory_id)` after INSERT-OR-IGNORE-ing both names into `categories`, so
+every new row immediately carries surrogate keys.  The rename handler can then
+be exact: it only rewrites strings on rows whose `*_id` matches **and** whose
+string value still agrees with the pre-rename name, so a user's manual category
+edit (which changes the string but leaves the old id) is never silently
+overwritten.
 """
 
 from __future__ import annotations
@@ -24,13 +34,58 @@ router = APIRouter(prefix="/api/categories", tags=["categories"])
 # ── Pydantic models ──────────────────────────────────────────────────────────
 
 
-class CategoryCreate(BaseModel):
-    name: str
-    kind: str = "category"  # 'category' or 'subcategory'
-
-
 class CategoryUpdate(BaseModel):
     name: str
+
+
+# ── Internal helper (used by expense / budget / import write paths) ───────────
+
+
+def resolve_category_ids(
+    conn: sqlite3.Connection,
+    category: str,
+    subcategory: str,
+) -> tuple[int | None, int | None]:
+    """
+    Return `(category_id, subcategory_id)` for the given string names.
+
+    * INSERT OR IGNORE guarantees a row exists before we read it back, so the
+      helper is safe to call from a transaction that hasn't committed yet.
+    * Empty strings resolve to None — they mean "no category" and there is no
+      categories row for an empty name.
+    * The helper never creates a row with `name = ''`; it only resolves names
+      that are genuinely present.
+    """
+    today = date.today().isoformat()
+    cat_id: int | None = None
+    sub_id: int | None = None
+
+    cat = category.strip() if category else ""
+    sub = subcategory.strip() if subcategory else ""
+
+    if cat:
+        conn.execute(
+            "INSERT OR IGNORE INTO categories (name, kind, created_date) VALUES (?, 'category', ?)",
+            (cat, today),
+        )
+        row = conn.execute(
+            "SELECT id FROM categories WHERE name = ? AND kind = 'category'", (cat,)
+        ).fetchone()
+        if row:
+            cat_id = row["id"]
+
+    if sub:
+        conn.execute(
+            "INSERT OR IGNORE INTO categories (name, kind, created_date) VALUES (?, 'subcategory', ?)",
+            (sub, today),
+        )
+        row = conn.execute(
+            "SELECT id FROM categories WHERE name = ? AND kind = 'subcategory'", (sub,)
+        ).fetchone()
+        if row:
+            sub_id = row["id"]
+
+    return cat_id, sub_id
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -105,56 +160,35 @@ def list_categories(
     return [dict(r) for r in rows]
 
 
-@router.post("", status_code=201)
-def create_category(body: CategoryCreate) -> dict:
-    """Create a new category surrogate record."""
-    name = body.name.strip()
-    if not name:
-        raise HTTPException(status_code=400, detail="Category name cannot be empty")
-    if body.kind not in ("category", "subcategory"):
-        raise HTTPException(status_code=400, detail="kind must be 'category' or 'subcategory'")
-
-    today_str = date.today().isoformat()
-    with get_db() as conn:
-        try:
-            cur = conn.execute(
-                "INSERT INTO categories (name, kind, created_date) VALUES (?, ?, ?)",
-                (name, body.kind, today_str),
-            )
-            conn.commit()
-            cat_id = cur.lastrowid
-        except sqlite3.IntegrityError:
-            raise HTTPException(
-                status_code=409,
-                detail=f"Category '{name}' of kind '{body.kind}' already exists.",
-            )
-
-        row = conn.execute(
-            "SELECT id, name, kind, created_date FROM categories WHERE id = ?", (cat_id,)
-        ).fetchone()
-
-    return dict(row)
-
-
 @router.patch("/{category_id}")
 def update_category(category_id: int, body: CategoryUpdate) -> dict:
     """
     Rename a category surrogate record by ID.
-    Updates categories table and dual-writes string columns in budgets and expenses.
+
+    Dual-write safety: only updates a row's string column when BOTH the
+    `*_id` matches AND the string still reflects the old name.  This prevents
+    clobbering a user's manual recategorisation, which changes the string but
+    leaves the original id in place.
+
+    Tables covered: `categories`, `budgets`, `expenses`.
+    Not covered (deferred, will be retired in Phase 4): `budget_drafts`.
+    Not covered (deferred, will be retired in Phase 3): `goal_budget_links`.
     """
     new_name = body.name.strip()
     if not new_name:
         raise HTTPException(status_code=400, detail="Category name cannot be empty")
 
     with get_db() as conn:
-        row = conn.execute(
+        existing = conn.execute(
             "SELECT id, name, kind FROM categories WHERE id = ?", (category_id,)
         ).fetchone()
 
-        if row is None:
+        if existing is None:
             raise HTTPException(status_code=404, detail="Category not found")
 
-        kind = row["kind"]
+        old_name = existing["name"]
+        kind = existing["kind"]
+
         try:
             conn.execute(
                 "UPDATE categories SET name = ? WHERE id = ?",
@@ -166,24 +200,26 @@ def update_category(category_id: int, body: CategoryUpdate) -> dict:
                 detail=f"Category '{new_name}' of kind '{kind}' already exists.",
             )
 
-        # Dual-write string columns for backwards compatibility during expand phase
+        # Dual-write: only touch rows whose id AND string still agree with the
+        # pre-rename state.  A row whose string diverged was manually edited by
+        # the user after the last backfill — leave it alone.
         if kind == "category":
             conn.execute(
-                "UPDATE budgets SET category = ? WHERE category_id = ?",
-                (new_name, category_id),
+                "UPDATE budgets SET category = ? WHERE category_id = ? AND category = ?",
+                (new_name, category_id, old_name),
             )
             conn.execute(
-                "UPDATE expenses SET category = ? WHERE category_id = ?",
-                (new_name, category_id),
+                "UPDATE expenses SET category = ? WHERE category_id = ? AND category = ?",
+                (new_name, category_id, old_name),
             )
         else:  # subcategory
             conn.execute(
-                "UPDATE budgets SET subcategory = ? WHERE subcategory_id = ?",
-                (new_name, category_id),
+                "UPDATE budgets SET subcategory = ? WHERE subcategory_id = ? AND subcategory = ?",
+                (new_name, category_id, old_name),
             )
             conn.execute(
-                "UPDATE expenses SET subcategory = ? WHERE subcategory_id = ?",
-                (new_name, category_id),
+                "UPDATE expenses SET subcategory = ? WHERE subcategory_id = ? AND subcategory = ?",
+                (new_name, category_id, old_name),
             )
 
         conn.commit()

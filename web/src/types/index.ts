@@ -180,11 +180,6 @@ export interface CategoryRow {
   created_date?: string | null;
 }
 
-export interface CategoryCreate {
-  name: string;
-  kind: 'category' | 'subcategory';
-}
-
 export interface CategoryUpdate {
   name: string;
 }

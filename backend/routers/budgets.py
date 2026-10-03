@@ -24,6 +24,7 @@ from pydantic import BaseModel
 
 from budget_math import monthly_equivalent
 from database import get_db
+from routers.categories import resolve_category_ids
 
 router = APIRouter(prefix="/api/budgets", tags=["budgets"])
 
@@ -161,10 +162,12 @@ def list_budgets() -> list[dict]:
 @router.post("", status_code=201)
 def create_budget(body: BudgetCreate) -> dict:
     with get_db() as conn:
+        cat_id, sub_id = resolve_category_ids(conn, body.category, body.subcategory)
         cur = conn.execute(
             """INSERT INTO budgets
-                 (category, subcategory, limit_amount, frequency, effective_date, conclusion_date)
-               VALUES (?, ?, ?, ?, ?, ?)""",
+                 (category, subcategory, limit_amount, frequency, effective_date, conclusion_date,
+                  category_id, subcategory_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 body.category,
                 body.subcategory,
@@ -172,6 +175,8 @@ def create_budget(body: BudgetCreate) -> dict:
                 body.frequency,
                 body.effective_date,
                 body.conclusion_date,
+                cat_id,
+                sub_id,
             ),
         )
         conn.commit()
@@ -187,10 +192,22 @@ def update_budget(budget_id: int, body: BudgetUpdate) -> dict:
     if not updates:
         raise HTTPException(status_code=400, detail="No fields to update")
 
-    set_clause = ", ".join(f"{k} = ?" for k in updates)
-    values = list(updates.values()) + [budget_id]
-
     with get_db() as conn:
+        # If the caller is changing category or subcategory, resolve fresh surrogate keys.
+        if "category" in updates or "subcategory" in updates:
+            existing = conn.execute(
+                "SELECT category, subcategory FROM budgets WHERE id = ?", (budget_id,)
+            ).fetchone()
+            if existing is None:
+                raise HTTPException(status_code=404, detail="Budget not found")
+            final_cat = updates.get("category", existing["category"])
+            final_sub = updates.get("subcategory", existing["subcategory"])
+            cat_id, sub_id = resolve_category_ids(conn, final_cat, final_sub)
+            updates["category_id"] = cat_id
+            updates["subcategory_id"] = sub_id
+
+        set_clause = ", ".join(f"{k} = ?" for k in updates)
+        values = list(updates.values()) + [budget_id]
         conn.execute(f"UPDATE budgets SET {set_clause} WHERE id = ?", values)
         conn.commit()
         row = conn.execute(

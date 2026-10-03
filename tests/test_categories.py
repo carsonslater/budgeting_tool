@@ -5,9 +5,11 @@ Phase 2 acceptance criteria & feature tests (plan §5 & §9, "Category agility")
 
     - GET /api/categories/active?month=YYYY-MM
     - GET /api/categories
-    - POST /api/categories
-    - PATCH /api/categories/{id} (surrogate key rename, dual-write)
-    - _auto_categorize matching against active budget categories only
+    - PATCH /api/categories/{id} (surrogate key rename, defensive dual-write)
+    - resolve_category_ids: every write path (create, update, import) carries *_id
+    - Rename does NOT clobber a user's manual category edit
+    - Import confirm carries surrogate IDs
+    - _auto_categorize matches against expense descriptions only (no bare budget names)
 
 The database is built on a temp path, never `data/budget.db`.
 """
@@ -24,6 +26,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "backend"))
 import database
 from main import app
 from migrations import run_migrations
+from routers.categories import resolve_category_ids
 from routers.import_csv import _auto_categorize
 
 
@@ -43,15 +46,16 @@ def client(db_path):
     return TestClient(app)
 
 
+# ── Active categories endpoint ────────────────────────────────────────────────
+
 def test_active_categories(client, db_path):
-    """Verify GET /api/categories/active returns active budget lines for specified month."""
+    """GET /api/categories/active only returns budget lines active in the target month."""
     with database.get_db() as conn:
-        # Active budget
         conn.execute(
             """INSERT INTO budgets (category, subcategory, limit_amount, frequency, effective_date)
                VALUES ('Food', 'Groceries', 500, 'Monthly', '2025-01-01')"""
         )
-        # Concluded budget (not active in 2025-03)
+        # Concluded before 2025-03 — must not appear
         conn.execute(
             """INSERT INTO budgets (category, subcategory, limit_amount, frequency, effective_date, conclusion_date)
                VALUES ('OldCategory', 'Sub', 200, 'Monthly', '2024-01-01', '2024-12-31')"""
@@ -66,63 +70,233 @@ def test_active_categories(client, db_path):
     assert data[0]["subcategory"] == "Groceries"
 
 
-def test_list_and_create_category_records(client, db_path):
-    """Verify GET and POST /api/categories."""
-    res_create = client.post("/api/categories", json={"name": "Travel", "kind": "category"})
-    assert res_create.status_code == 201
-    cat_data = res_create.json()
-    assert cat_data["name"] == "Travel"
-    assert cat_data["kind"] == "category"
+# ── resolve_category_ids helper ───────────────────────────────────────────────
 
-    # Duplicate should fail with 409
-    res_dup = client.post("/api/categories", json={"name": "Travel", "kind": "category"})
-    assert res_dup.status_code == 409
-
-    # List all
-    res_list = client.get("/api/categories?kind=category")
-    assert res_list.status_code == 200
-    all_cats = res_list.json()
-    names = [c["name"] for c in all_cats]
-    assert "Travel" in names
-
-
-def test_patch_category_rename_and_dual_write(client, db_path):
-    """Verify PATCH /api/categories/{id} updates surrogate record and dual-writes to budgets/expenses."""
+def test_resolve_category_ids_creates_and_returns(db_path):
+    """resolve_category_ids inserts missing rows and returns consistent ids."""
     with database.get_db() as conn:
-        cur = conn.execute(
-            "INSERT INTO categories (name, kind, created_date) VALUES ('Dining Out', 'category', '2025-01-01')"
-        )
-        cat_id = cur.lastrowid
+        cat_id, sub_id = resolve_category_ids(conn, "Food", "Groceries")
+        conn.commit()
+
+    assert cat_id is not None
+    assert sub_id is not None
+
+    # Same call should return the same ids (idempotent — INSERT OR IGNORE)
+    with database.get_db() as conn:
+        cat_id2, sub_id2 = resolve_category_ids(conn, "Food", "Groceries")
+        conn.commit()
+
+    assert cat_id2 == cat_id
+    assert sub_id2 == sub_id
+
+
+def test_resolve_category_ids_empty_strings(db_path):
+    """Empty category/subcategory strings resolve to None, never create a row."""
+    with database.get_db() as conn:
+        cat_id, sub_id = resolve_category_ids(conn, "", "")
+        conn.commit()
+
+    assert cat_id is None
+    assert sub_id is None
+
+    with database.get_db() as conn:
+        blank_rows = conn.execute("SELECT * FROM categories WHERE name = ''").fetchall()
+    assert blank_rows == []
+
+
+# ── Expense create / update carry surrogate ids ───────────────────────────────
+
+def test_create_expense_carries_category_id(client, db_path):
+    """POST /api/expenses writes category_id and subcategory_id on new rows."""
+    resp = client.post("/api/expenses", json={
+        "date": "2025-03-01",
+        "description": "Test purchase",
+        "category": "Food",
+        "subcategory": "Groceries",
+        "amount": 50.0,
+        "payer": "Joint",
+        "expense_type": "Monthly",
+    })
+    assert resp.status_code == 201
+
+    with database.get_db() as conn:
+        row = conn.execute(
+            "SELECT category_id, subcategory_id FROM expenses WHERE id = ?",
+            (resp.json()["id"],),
+        ).fetchone()
+
+    assert row["category_id"] is not None
+    assert row["subcategory_id"] is not None
+
+
+def test_update_expense_refreshes_category_id(client, db_path):
+    """PATCH /api/expenses/{id} updates *_id when category changes."""
+    create_resp = client.post("/api/expenses", json={
+        "date": "2025-03-01",
+        "description": "Store visit",
+        "category": "Food",
+        "subcategory": "Groceries",
+        "amount": 30.0,
+        "payer": "Joint",
+        "expense_type": "Monthly",
+    })
+    expense_id = create_resp.json()["id"]
+
+    patch_resp = client.patch(f"/api/expenses/{expense_id}", json={
+        "category": "Dining",
+        "subcategory": "Restaurants",
+    })
+    assert patch_resp.status_code == 200
+
+    with database.get_db() as conn:
+        row = conn.execute(
+            "SELECT category, subcategory, category_id, subcategory_id FROM expenses WHERE id = ?",
+            (expense_id,),
+        ).fetchone()
+
+    assert row["category"] == "Dining"
+    assert row["subcategory"] == "Restaurants"
+    assert row["category_id"] is not None
+    assert row["subcategory_id"] is not None
+
+    # Verify the new ids point at the correct categories rows
+    with database.get_db() as conn:
+        cat_row = conn.execute(
+            "SELECT name FROM categories WHERE id = ?", (row["category_id"],)
+        ).fetchone()
+        sub_row = conn.execute(
+            "SELECT name FROM categories WHERE id = ?", (row["subcategory_id"],)
+        ).fetchone()
+    assert cat_row["name"] == "Dining"
+    assert sub_row["name"] == "Restaurants"
+
+
+# ── Rename is safe and does NOT clobber user edits ───────────────────────────
+
+def test_rename_by_id_after_create_preserves_attribution(client, db_path):
+    """
+    Regression: create an expense via POST (id set), rename its category by id,
+    assert the expense string is updated.  This traverses the create path where
+    the original bug lived.
+    """
+    create_resp = client.post("/api/expenses", json={
+        "date": "2025-03-01",
+        "description": "Safeway run",
+        "category": "Food",
+        "subcategory": "Groceries",
+        "amount": 75.0,
+        "payer": "Joint",
+        "expense_type": "Monthly",
+    })
+    assert create_resp.status_code == 201
+    expense_id = create_resp.json()["id"]
+
+    # Retrieve the category_id that was assigned
+    with database.get_db() as conn:
+        row = conn.execute(
+            "SELECT category_id FROM expenses WHERE id = ?", (expense_id,)
+        ).fetchone()
+    cat_id = row["category_id"]
+    assert cat_id is not None
+
+    # Rename via PATCH /api/categories/{id}
+    rename_resp = client.patch(f"/api/categories/{cat_id}", json={"name": "Eating Out"})
+    assert rename_resp.status_code == 200
+
+    # The expense string should have been updated
+    with database.get_db() as conn:
+        after = conn.execute(
+            "SELECT category FROM expenses WHERE id = ?", (expense_id,)
+        ).fetchone()
+    assert after["category"] == "Eating Out"
+
+
+def test_rename_does_not_clobber_user_edit(client, db_path):
+    """
+    The clobber scenario: user manually recategorises an expense to a *different*
+    category (string moves away from the original; category_id still points at
+    the old row).  Renaming the old category must NOT overwrite the user's string.
+    """
+    # Create expense with "Food"
+    create_resp = client.post("/api/expenses", json={
+        "date": "2025-04-01",
+        "description": "Mystery purchase",
+        "category": "Food",
+        "subcategory": "Groceries",
+        "amount": 25.0,
+        "payer": "Joint",
+        "expense_type": "Monthly",
+    })
+    expense_id = create_resp.json()["id"]
+
+    with database.get_db() as conn:
+        original_cat_id = conn.execute(
+            "SELECT category_id FROM expenses WHERE id = ?", (expense_id,)
+        ).fetchone()["category_id"]
+
+    # User manually edits the expense to "Dining" / "Restaurants" —
+    # the UI sends a PATCH that resolves new ids; original_cat_id no longer
+    # matches the string.  Simulate this directly in the DB to isolate the
+    # rename guard: set category to something different but leave category_id
+    # unchanged, as would happen if a client sent only the string columns.
+    with database.get_db() as conn:
         conn.execute(
-            """INSERT INTO budgets (category, subcategory, limit_amount, effective_date, category_id)
-               VALUES ('Dining Out', 'Restaurants', 300, '2025-01-01', ?)""",
-            (cat_id,),
-        )
-        conn.execute(
-            """INSERT INTO expenses (date, description, category, subcategory, amount, payer, expense_type, category_id)
-               VALUES ('2025-03-01', 'Dinner', 'Dining Out', 'Restaurants', 50, 'Joint', 'Monthly', ?)""",
-            (cat_id,),
+            "UPDATE expenses SET category = 'Dining', subcategory = 'Restaurants' WHERE id = ?",
+            (expense_id,),
         )
         conn.commit()
 
-    # Rename via PATCH /api/categories/{id}
-    response = client.patch(f"/api/categories/{cat_id}", json={"name": "Eating Out"})
-    assert response.status_code == 200
-    assert response.json()["name"] == "Eating Out"
+    # Now rename the original category_id ("Food") to "Eating Out"
+    rename_resp = client.patch(f"/api/categories/{original_cat_id}", json={"name": "Eating Out"})
+    assert rename_resp.status_code == 200
 
-    # Check dual-write to budgets and expenses
+    # The user's string ("Dining") must be untouched
     with database.get_db() as conn:
-        b_row = conn.execute("SELECT category FROM budgets WHERE category_id = ?", (cat_id,)).fetchone()
-        assert b_row["category"] == "Eating Out"
+        after = conn.execute(
+            "SELECT category FROM expenses WHERE id = ?", (expense_id,)
+        ).fetchone()
+    assert after["category"] == "Dining", (
+        f"Rename clobbered user edit: expected 'Dining', got '{after['category']}'"
+    )
 
-        e_row = conn.execute("SELECT category FROM expenses WHERE category_id = ?", (cat_id,)).fetchone()
-        assert e_row["category"] == "Eating Out"
 
+# ── Import confirm carries surrogate ids ─────────────────────────────────────
 
-def test_auto_categorize_active_budgets_only(db_path):
-    """Verify _auto_categorize matches against active budget categories."""
+def test_import_confirm_carries_category_id(client, db_path):
+    """POST /api/import/confirm sets category_id and subcategory_id on imported rows."""
+    payload = {
+        "rows": [
+            {
+                "date": "2025-03-15",
+                "description": "SAFEWAY #100",
+                "amount": 60.0,
+                "category": "Food",
+                "subcategory": "Groceries",
+                "payer": "Joint",
+                "expense_type": "Monthly",
+                "is_duplicate": False,
+                "original_index": 0,
+            }
+        ]
+    }
+    resp = client.post("/api/import/confirm", json=payload)
+    assert resp.status_code == 200
+    assert resp.json()["imported"] == 1
+
     with database.get_db() as conn:
-        # Active budget for Safeway -> (Food, Groceries)
+        row = conn.execute(
+            "SELECT category_id, subcategory_id FROM expenses ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+
+    assert row["category_id"] is not None, "Import did not set category_id"
+    assert row["subcategory_id"] is not None, "Import did not set subcategory_id"
+
+
+# ── _auto_categorize uses expense descriptions only ──────────────────────────
+
+def test_auto_categorize_expense_descriptions_only(db_path):
+    """_auto_categorize returns a match when an expense description exists for an active budget line."""
+    with database.get_db() as conn:
         conn.execute(
             """INSERT INTO budgets (category, subcategory, limit_amount, effective_date)
                VALUES ('Food', 'Groceries', 500, '2020-01-01')"""
@@ -131,19 +305,66 @@ def test_auto_categorize_active_budgets_only(db_path):
             """INSERT INTO expenses (date, description, category, subcategory, amount, payer, expense_type)
                VALUES ('2025-01-01', 'SAFEWAY STORE #123', 'Food', 'Groceries', 75.0, 'Joint', 'Monthly')"""
         )
-        # Inactive budget -> (Gym, Fitness)
+        conn.commit()
+
+        cat, sub = _auto_categorize("SAFEWAY #456", conn)
+
+    assert cat == "Food"
+    assert sub == "Groceries"
+
+
+def test_auto_categorize_bare_budget_name_not_a_candidate(db_path):
+    """
+    Bare budget category names ('Food') must NOT be candidates.
+    Without expense description evidence, _auto_categorize should return ('', '').
+    """
+    with database.get_db() as conn:
+        conn.execute(
+            """INSERT INTO budgets (category, subcategory, limit_amount, effective_date)
+               VALUES ('Food', 'Groceries', 500, '2020-01-01')"""
+        )
+        # No expenses — only the budget name exists
+        conn.commit()
+
+        cat, sub = _auto_categorize("Food purchase", conn)
+
+    # Without expense descriptions to match against, should return ("", "")
+    assert cat == ""
+    assert sub == ""
+
+
+def test_auto_categorize_inactive_budget_excluded(db_path):
+    """Expenses whose category has no active budget line are not returned."""
+    with database.get_db() as conn:
+        # No budgets at all — Gym/Fitness is orphaned
         conn.execute(
             """INSERT INTO expenses (date, description, category, subcategory, amount, payer, expense_type)
                VALUES ('2025-01-01', 'PLANET FITNESS', 'Gym', 'Fitness', 20.0, 'Joint', 'Monthly')"""
         )
         conn.commit()
 
-        # Safeway should match Food/Groceries
-        cat, sub = _auto_categorize("SAFEWAY #123", conn)
-        assert cat == "Food"
-        assert sub == "Groceries"
+        cat, sub = _auto_categorize("PLANET FITNESS", conn)
 
-        # Planet Fitness has no active budget line, so should return ("", "")
-        cat_gym, sub_gym = _auto_categorize("PLANET FITNESS", conn)
-        assert cat_gym == ""
-        assert sub_gym == ""
+    assert cat == ""
+    assert sub == ""
+
+
+# ── list_categories endpoint ──────────────────────────────────────────────────
+
+def test_list_categories(client, db_path):
+    """GET /api/categories returns records backfilled by migration or created via write paths."""
+    # Creating an expense through the API triggers resolve_category_ids
+    client.post("/api/expenses", json={
+        "date": "2025-03-01",
+        "description": "Groceries",
+        "category": "Food",
+        "subcategory": "Groceries",
+        "amount": 50.0,
+        "payer": "Joint",
+        "expense_type": "Monthly",
+    })
+
+    resp = client.get("/api/categories?kind=category")
+    assert resp.status_code == 200
+    names = [c["name"] for c in resp.json()]
+    assert "Food" in names

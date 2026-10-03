@@ -17,6 +17,7 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
 from database import get_db
+from routers.categories import resolve_category_ids
 
 router = APIRouter(prefix="/api/expenses", tags=["expenses"])
 
@@ -123,12 +124,13 @@ def list_expenses(
 @router.post("", status_code=201)
 def create_expense(body: ExpenseCreate) -> dict:
     with get_db() as conn:
+        cat_id, sub_id = resolve_category_ids(conn, body.category, body.subcategory)
         cur = conn.execute(
             """INSERT INTO expenses (date, description, category, subcategory,
-                                     amount, payer, expense_type)
-               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                                     amount, payer, expense_type, category_id, subcategory_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (body.date, body.description, body.category, body.subcategory,
-             body.amount, body.payer, body.expense_type),
+             body.amount, body.payer, body.expense_type, cat_id, sub_id),
         )
         conn.commit()
         row = conn.execute(
@@ -143,10 +145,24 @@ def update_expense(expense_id: int, body: ExpenseUpdate) -> dict:
     if not updates:
         raise HTTPException(status_code=400, detail="No fields to update")
 
-    set_clause = ", ".join(f"{k} = ?" for k in updates)
-    values = list(updates.values()) + [expense_id]
-
     with get_db() as conn:
+        # If the caller is changing category or subcategory, resolve fresh surrogate
+        # keys so the row stays rename-safe.  We need the final category/subcategory
+        # values, which may be a mix of the patch fields and the existing row.
+        if "category" in updates or "subcategory" in updates:
+            existing = conn.execute(
+                "SELECT category, subcategory FROM expenses WHERE id = ?", (expense_id,)
+            ).fetchone()
+            if existing is None:
+                raise HTTPException(status_code=404, detail="Expense not found")
+            final_cat = updates.get("category", existing["category"])
+            final_sub = updates.get("subcategory", existing["subcategory"])
+            cat_id, sub_id = resolve_category_ids(conn, final_cat, final_sub)
+            updates["category_id"] = cat_id
+            updates["subcategory_id"] = sub_id
+
+        set_clause = ", ".join(f"{k} = ?" for k in updates)
+        values = list(updates.values()) + [expense_id]
         conn.execute(
             f"UPDATE expenses SET {set_clause} WHERE id = ?", values
         )

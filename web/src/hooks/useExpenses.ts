@@ -27,13 +27,6 @@ export function useExpenses(filters?: ExpenseFilters) {
   });
 }
 
-export function useActiveCategories(month?: string) {
-  return useQuery({
-    queryKey: ['categories', 'active', month ?? 'current'],
-    queryFn: () => fetchActiveCategories(month),
-    staleTime: 60_000,
-  });
-}
 
 export function useCategories(month?: string) {
   return useQuery({

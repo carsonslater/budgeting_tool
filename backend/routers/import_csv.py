@@ -23,6 +23,7 @@ from fastapi import APIRouter, HTTPException, UploadFile, File
 from pydantic import BaseModel
 
 from database import get_db
+from routers.categories import resolve_category_ids
 
 router = APIRouter(prefix="/api/import", tags=["import"])
 
@@ -240,9 +241,15 @@ def _detect_and_parse(content: bytes, filename: str) -> pd.DataFrame:
 
 def _auto_categorize(description: str, conn) -> tuple[str, str]:
     """
-    Fuzzy-match description against active budget categories and past expense
-    descriptions belonging to active budget lines to predict category and subcategory.
-    Returns ("", "") if no match found.
+    Fuzzy-match description against expense descriptions that belong to active
+    budget categories, to predict category and subcategory.
+
+    Only expense descriptions are used as candidates — bare budget category or
+    subcategory names are intentionally excluded because they are short strings
+    that score high against many unrelated descriptions and would map a merchant
+    name to an arbitrary subcategory.
+
+    Returns ("", "") if no match found or if thefuzz is not installed.
     """
     try:
         from thefuzz import process  # type: ignore
@@ -270,13 +277,6 @@ def _auto_categorize(description: str, conn) -> tuple[str, str]:
             pair = (r["category"], r["subcategory"])
             if pair in active_pairs and r["description"].strip():
                 choices[r["description"].strip()] = pair
-
-        # Also add active budget names themselves as candidates
-        for cat, sub in active_pairs:
-            if cat and cat not in choices:
-                choices[cat] = (cat, sub)
-            if sub and sub not in choices:
-                choices[sub] = (cat, sub)
 
         if not choices:
             return "", ""
@@ -368,10 +368,12 @@ def confirm_import(body: ConfirmImportRequest) -> dict:
                 skipped += 1
                 continue
 
+            cat_id, sub_id = resolve_category_ids(conn, row.category, row.subcategory)
             conn.execute(
                 """INSERT INTO expenses
-                     (date, description, category, subcategory, amount, payer, expense_type)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                     (date, description, category, subcategory, amount, payer, expense_type,
+                      category_id, subcategory_id)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     row.date,
                     row.description,
@@ -380,6 +382,8 @@ def confirm_import(body: ConfirmImportRequest) -> dict:
                     row.amount,
                     row.payer,
                     row.expense_type,
+                    cat_id,
+                    sub_id,
                 ),
             )
             imported += 1
