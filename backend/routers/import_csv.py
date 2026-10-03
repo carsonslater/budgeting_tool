@@ -240,19 +240,47 @@ def _detect_and_parse(content: bytes, filename: str) -> pd.DataFrame:
 
 def _auto_categorize(description: str, conn) -> tuple[str, str]:
     """
-    Fuzzy-match description against existing expense descriptions to predict
-    category and subcategory. Returns ("", "") if no match found.
+    Fuzzy-match description against active budget categories and past expense
+    descriptions belonging to active budget lines to predict category and subcategory.
+    Returns ("", "") if no match found.
     """
     try:
         from thefuzz import process  # type: ignore
 
-        rows = conn.execute(
-            "SELECT DISTINCT description, category, subcategory FROM expenses"
+        today_str = date.today().isoformat()
+        active_budgets = conn.execute(
+            """SELECT DISTINCT category, subcategory FROM budgets
+               WHERE limit_amount > 0
+                 AND effective_date <= ?
+                 AND (conclusion_date IS NULL OR conclusion_date >= ?)""",
+            (today_str, today_str),
         ).fetchall()
-        if not rows:
+
+        if not active_budgets:
             return "", ""
 
-        choices = {r["description"]: (r["category"], r["subcategory"]) for r in rows}
+        active_pairs = {(b["category"], b["subcategory"]) for b in active_budgets}
+
+        rows = conn.execute(
+            "SELECT DISTINCT description, category, subcategory FROM expenses WHERE category != ''"
+        ).fetchall()
+
+        choices: dict[str, tuple[str, str]] = {}
+        for r in rows:
+            pair = (r["category"], r["subcategory"])
+            if pair in active_pairs and r["description"].strip():
+                choices[r["description"].strip()] = pair
+
+        # Also add active budget names themselves as candidates
+        for cat, sub in active_pairs:
+            if cat and cat not in choices:
+                choices[cat] = (cat, sub)
+            if sub and sub not in choices:
+                choices[sub] = (cat, sub)
+
+        if not choices:
+            return "", ""
+
         match, score = process.extractOne(description, list(choices.keys()))
         if score and score >= 75:
             return choices[match]

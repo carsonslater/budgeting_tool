@@ -24,6 +24,7 @@ from routers import (
     reporting,
     import_csv,
     budget_drafts,
+    categories,
 )
 
 
@@ -79,6 +80,7 @@ app.add_middleware(
 app.include_router(expenses.router)
 app.include_router(budgets.router)
 app.include_router(budget_drafts.router)
+app.include_router(categories.router)
 app.include_router(income.router)
 app.include_router(goals.router)
 app.include_router(reporting.router)

@@ -7,11 +7,12 @@ import { Button } from '../components/ui/Button';
 import { Badge } from '../components/ui/Badge';
 import { Input } from '../components/ui/Input';
 import { useStageImport, useConfirmImport } from '../hooks/useImport';
-import { useCategories, usePayers, useSubcategories } from '../hooks/useExpenses';
+import { Edit2, Tag } from 'lucide-react';
+import { useCategories, usePayers, useSubcategories, useAllCategoryRecords, useUpdateCategory } from '../hooks/useExpenses';
 import { useToast } from '../contexts/ToastContext';
 import { apiFetch } from '../api/client';
 import styles from './Settings.module.css';
-import type { StagedRow } from '../types';
+import type { CategoryRow, StagedRow } from '../types';
 
 function formatCurrency(amount: number) {
   return new Intl.NumberFormat('en-US', {
@@ -23,6 +24,10 @@ function formatCurrency(amount: number) {
 export const AppSettings: React.FC = () => {
   const { showToast } = useToast();
   
+  // Category Renaming State
+  const [editingCatId, setEditingCatId] = useState<number | null>(null);
+  const [editingCatName, setEditingCatName] = useState('');
+
   // Editor State
   const [editCategory, setEditCategory] = useState('');
   const [editSubcategory, setEditSubcategory] = useState('');
@@ -42,6 +47,8 @@ export const AppSettings: React.FC = () => {
   const { data: categories } = useCategories();
   const { data: payers } = usePayers();
   const { data: subcategories } = useSubcategories(editCategory);
+  const { data: categoryRecords } = useAllCategoryRecords();
+  const updateCategoryMutation = useUpdateCategory();
   
   const stageMutation = useStageImport();
   const confirmMutation = useConfirmImport();
@@ -158,6 +165,23 @@ export const AppSettings: React.FC = () => {
     });
   };
 
+  const handleRenameCategory = (cat: CategoryRow) => {
+    if (!editingCatName.trim()) return;
+    updateCategoryMutation.mutate(
+      { id: cat.id, data: { name: editingCatName.trim() } },
+      {
+        onSuccess: () => {
+          showToast(`Renamed ${cat.kind} to "${editingCatName.trim()}"`, 'success');
+          setEditingCatId(null);
+          setEditingCatName('');
+        },
+        onError: (err: any) => {
+          showToast(err.message || 'Failed to rename category', 'error');
+        },
+      }
+    );
+  };
+
   const duplicatesCount = stagedRows.filter(r => r.is_duplicate).length;
 
   return (
@@ -183,7 +207,85 @@ export const AppSettings: React.FC = () => {
         </Card>
       </div>
 
-      {/* SECTION 2: Import */}
+      {/* SECTION 2: Category Management (Surrogate Key renames) */}
+      <div className={styles.section}>
+        <h2 className={styles.sectionTitle}>Category Management</h2>
+        <Card padding="md">
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+            <div style={{ fontSize: '0.9rem', color: 'var(--color-text-muted)', marginBottom: '0.5rem' }}>
+              Rename category or subcategory records by ID without breaking historical expense attribution.
+            </div>
+            {categoryRecords && categoryRecords.length > 0 ? (
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: '0.5rem' }}>
+                {categoryRecords.map((c) => (
+                  <div
+                    key={c.id}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      padding: '0.5rem 0.75rem',
+                      background: 'var(--color-surface-raised)',
+                      borderRadius: '6px',
+                      fontSize: '0.9rem',
+                    }}
+                  >
+                    {editingCatId === c.id ? (
+                      <div style={{ display: 'flex', gap: '0.5rem', width: '100%' }}>
+                        <input
+                          type="text"
+                          value={editingCatName}
+                          onChange={(e) => setEditingCatName(e.target.value)}
+                          style={{
+                            flex: 1,
+                            background: 'var(--color-bg)',
+                            color: 'var(--color-text)',
+                            border: '1px solid var(--color-accent)',
+                            borderRadius: '4px',
+                            padding: '0.25rem 0.5rem',
+                            fontSize: '0.85rem',
+                          }}
+                          autoFocus
+                        />
+                        <Button size="sm" onClick={() => handleRenameCategory(c)}>
+                          Save
+                        </Button>
+                        <Button size="sm" variant="ghost" onClick={() => setEditingCatId(null)}>
+                          Cancel
+                        </Button>
+                      </div>
+                    ) : (
+                      <>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                          <Tag size={14} color="var(--color-accent)" />
+                          <span style={{ fontWeight: 500 }}>{c.name}</span>
+                          <Badge variant="muted">{c.kind}</Badge>
+                        </div>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => {
+                            setEditingCatId(c.id);
+                            setEditingCatName(c.name);
+                          }}
+                        >
+                          <Edit2 size={14} />
+                        </Button>
+                      </>
+                    )}
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div style={{ fontSize: '0.9rem', color: 'var(--color-text-muted)' }}>
+                No category records found.
+              </div>
+            )}
+          </div>
+        </Card>
+      </div>
+
+      {/* SECTION 3: Import */}
       <div className={styles.section}>
         <h2 className={styles.sectionTitle}>Import Bank Statement</h2>
         

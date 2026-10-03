@@ -161,3 +161,31 @@ export interface ImportResult {
   imported: number;
   skipped: number;
 }
+
+// ── Categories ────────────────────────────────────────────────────────────────
+
+export interface ActiveCategory {
+  budget_id: number;
+  category: string;
+  subcategory: string;
+  frequency: 'Monthly' | 'Quarterly' | 'Bi-annually' | 'Annually';
+  category_id?: number | null;
+  subcategory_id?: number | null;
+}
+
+export interface CategoryRow {
+  id: number;
+  name: string;
+  kind: 'category' | 'subcategory';
+  created_date?: string | null;
+}
+
+export interface CategoryCreate {
+  name: string;
+  kind: 'category' | 'subcategory';
+}
+
+export interface CategoryUpdate {
+  name: string;
+}
+
