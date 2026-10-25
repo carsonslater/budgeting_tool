@@ -80,7 +80,8 @@ tuple is **append-only**; `LATEST_VERSION = max(m.version for m in MIGRATIONS)` 
 Helpers in `migrations/helpers.py`.
 
 Shipped migrations (`m0001`, `m0002`) are **frozen — never edit**. `m0003` (filename predates the
-model) is still unshipped — the live DB is at v2 — so it remains amendable.
+model) is **shipped**: the live DB was migrated to v3 on 2026-10-24 (snapshot
+`backups/pre_migration_v2_to_v3_20261024_222509.db`). Treat it as frozen — never edit; add `m0004`.
 
 `m0003` expands legacy `budgets` windows into versions **event-based** (no dependency on today's
 date, nothing pre-materialized): it evaluates the old predicate at each effective month and each
@@ -112,8 +113,7 @@ against the live DB: OK — 59 lines / 108 versions over 96 months, idempotent.
 ## Gotchas
 
 - **App startup runs migrations.** Starting the server against `data/budget.db` migrates it
-  (after a snapshot). `data/budget.db` is still at `user_version=2`; v3 has only been validated on
-  copies. Don't touch the real DB without intending to migrate it. Tests use temp DBs via
+  (after a snapshot). The live DB is at `user_version=3`. Tests use temp DBs via
   `monkeypatch.setattr(database, "_DB_PATH", ...)`.
 - `budget_store._resolve_ids` lazy-imports `routers.categories` (circular-import guard) — write
   paths only. `resolve_category_ids` reads `row["id"]`, so write-path connections need
@@ -146,11 +146,8 @@ against the live DB: OK — 59 lines / 108 versions over 96 months, idempotent.
 ## Current state (2026-10-25)
 
 The sparse-versioned rewrite is **implemented** (backend 190 tests, frontend 7, build clean;
-verify script OK on a copy of the live DB). Nothing is committed: a large uncommitted working set
-on `dev`, including untracked `backend/budget_schema.py`, `backend/budget_store.py`,
-`backend/routers/month_plans.py`, `backend/migrations/m0003_per_month_budgets.py`,
-`scripts/verify_m0003_expansion.py`, and the new tests (`test_budget_store.py`,
-`test_budgets_api.py`, `test_month_plans_api.py`, `test_backup.py`).
+verify script OK on a copy of the live DB). Committed on `dev` as `05fc550` and the live DB is
+migrated to v3 (59 lines / 108 versions; legacy `budgets` and `budget_drafts` left intact).
 
 Open for your veto (calls made during implementation): earlier-frequency amounts are converted to
 preserve monthly equivalent (only Health/Medication affected live); a runtime frequency edit
@@ -184,8 +181,6 @@ compensated: goals currently drive no monthly savings amount.
 4. Phase 3 sweep: `m0004` for `goal_allocations` + annual-bill funds, sweep endpoints/UI; retire
    `income_sources` and move Dashboard/Goals to per-month income.
 5. Decide whether to amend the 09-28 plan in place or let the later plans supersede it.
-6. Commit the working set as a checkpoint (commits are allowed), then migrate the live DB when
-   ready (read the verify report first; a snapshot is automatic).
 
 ### Design decisions (decided 2026-10-24; not yet implemented)
 
