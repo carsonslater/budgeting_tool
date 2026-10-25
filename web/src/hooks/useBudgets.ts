@@ -6,29 +6,31 @@ import {
   deleteBudget,
   fetchSuggestedBudgets,
 } from '../api/budgets';
-import type { BudgetCreate, BudgetUpdate } from '../types';
+import type { ApplyScope, BudgetCreate, BudgetUpdate } from '../types';
 
 // ── Query keys ────────────────────────────────────────────────────────────────
 
 export const budgetKeys = {
-  all:       ['budgets']               as const,
-  list:      ['budgets', 'list']       as const,
-  suggested: ['budgets', 'suggested']  as const,
+  all:       ['budgets']                                        as const,
+  list:      (month?: string) => ['budgets', 'list', month ?? 'current'] as const,
+  suggested: (month?: string) => ['budgets', 'suggested', month ?? 'current'] as const,
 };
 
 // ── Queries ───────────────────────────────────────────────────────────────────
 
-export function useBudgets() {
+export function useBudgets(month?: string) {
   return useQuery({
-    queryKey: budgetKeys.list,
-    queryFn:  fetchBudgets,
+    queryKey: budgetKeys.list(month),
+    queryFn:  () => fetchBudgets(month),
+    enabled:  !!month,
   });
 }
 
-export function useSuggestedBudgets() {
+export function useSuggestedBudgets(month?: string) {
   return useQuery({
-    queryKey: budgetKeys.suggested,
-    queryFn:  fetchSuggestedBudgets,
+    queryKey: budgetKeys.suggested(month),
+    queryFn:  () => fetchSuggestedBudgets(month),
+    enabled:  !!month,
   });
 }
 
@@ -47,8 +49,17 @@ export function useCreateBudget() {
 export function useUpdateBudget() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ id, data }: { id: number; data: BudgetUpdate }) =>
-      updateBudget(id, data),
+    mutationFn: ({
+      lineKey,
+      month,
+      data,
+      scope,
+    }: {
+      lineKey: string;
+      month: string;
+      data: BudgetUpdate;
+      scope?: ApplyScope;
+    }) => updateBudget(lineKey, month, data, scope),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: budgetKeys.all });
     },
@@ -58,7 +69,15 @@ export function useUpdateBudget() {
 export function useDeleteBudget() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (id: number) => deleteBudget(id),
+    mutationFn: ({
+      lineKey,
+      month,
+      scope,
+    }: {
+      lineKey: string;
+      month: string;
+      scope?: ApplyScope;
+    }) => deleteBudget(lineKey, month, scope),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: budgetKeys.all });
     },

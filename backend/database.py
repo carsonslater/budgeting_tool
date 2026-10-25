@@ -46,6 +46,40 @@ def get_db() -> sqlite3.Connection:
     return conn
 
 
+def backups_dir() -> Path:
+    """Where snapshots are written: ``backups/`` beside the ``data/`` folder."""
+    return _DB_PATH.parent.parent / "backups"
+
+
+def snapshot_database(dest: Path) -> Path:
+    """
+    Copy the live database to ``dest`` using SQLite's backup API.
+
+    A plain file copy can miss committed pages that still live only in the ``-wal``
+    file; the backup API reads a consistent snapshot through the database engine.
+    """
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    src = sqlite3.connect(str(_DB_PATH))
+    dst = sqlite3.connect(str(dest))
+    try:
+        src.backup(dst)
+    finally:
+        dst.close()
+        src.close()
+    return dest
+
+
+def has_data(conn: sqlite3.Connection) -> bool:
+    """True when any core table holds rows, i.e. there is something worth snapshotting."""
+    for table in ("expenses", "budgets", "goals", "income_sources"):
+        try:
+            if conn.execute(f"SELECT 1 FROM {table} LIMIT 1").fetchone():
+                return True
+        except sqlite3.OperationalError:
+            continue  # table not created yet
+    return False
+
+
 def init_db() -> None:
     """Create all tables (idempotent — uses IF NOT EXISTS)."""
     _DB_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -96,15 +130,6 @@ def init_db() -> None:
                 subcategory TEXT    NOT NULL DEFAULT '',
                 start_date  TEXT    NOT NULL,
                 end_date    TEXT
-            );
-
-            CREATE TABLE IF NOT EXISTS budget_drafts (
-                id              INTEGER PRIMARY KEY AUTOINCREMENT,
-                target_month    TEXT    NOT NULL,
-                category        TEXT    NOT NULL,
-                subcategory     TEXT    NOT NULL DEFAULT '',
-                limit_amount    REAL    NOT NULL DEFAULT 0,
-                frequency       TEXT    NOT NULL DEFAULT 'Monthly'
             );
 
             -- Sweep rules: controls how surplus is distributed to goals at month-end

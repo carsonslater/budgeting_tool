@@ -1,5 +1,5 @@
-import React, { useState, useMemo } from 'react';
-import { format, addMonths, parseISO, startOfMonth } from 'date-fns';
+import React, { useState, useMemo, useEffect } from 'react';
+import { format, parseISO, subMonths, startOfMonth } from 'date-fns';
 import { Trash2 } from 'lucide-react';
 import { Card } from '../components/ui/Card';
 import { Input } from '../components/ui/Input';
@@ -7,12 +7,23 @@ import { Button } from '../components/ui/Button';
 import { Select } from '../components/ui/Select';
 import { MonthPicker } from '../components/ui/MonthPicker';
 import { useCategories, useSubcategories } from '../hooks/useExpenses';
-import { useBudgetDrafts } from '../hooks/useBudgetDrafts';
-import { useBudgets } from '../hooks/useBudgets';
+import {
+  useBudgets,
+  useCreateBudget,
+  useUpdateBudget,
+  useDeleteBudget,
+} from '../hooks/useBudgets';
 import { useToast } from '../contexts/ToastContext';
-import styles from './Planning.module.css'; // Reuse Budgets styling
-import type { BudgetDraft } from '../types';
+import styles from './Planning.module.css';
+import type { Budget } from '../types';
 import { monthlyEquivalent } from '../lib/budgetMath';
+
+const FREQUENCIES: Budget['frequency'][] = [
+  'Monthly',
+  'Quarterly',
+  'Bi-annually',
+  'Annually',
+];
 
 function formatCurrency(amount: number) {
   return new Intl.NumberFormat('en-US', {
@@ -21,100 +32,135 @@ function formatCurrency(amount: number) {
   }).format(amount);
 }
 
+/**
+ * Planning — edit one month's budget.
+ *
+ * Edits apply immediately (there are no drafts). A line keeps its amount from
+ * the month it was set until its next change, so a month with no edits of its
+ * own simply follows the months before it. An edit here carries forward to later
+ * months until they are changed, and never touches earlier months.
+ */
 export const Planning: React.FC = () => {
   const { showToast } = useToast();
 
-  // Start with next month
-  const [targetMonth, setTargetMonth] = useState(format(startOfMonth(addMonths(new Date(), 1)), 'yyyy-MM-dd'));
+  const [month, setMonth] = useState(format(new Date(), 'yyyy-MM'));
 
-  // Form State
-  const [editId, setEditId] = useState<number | null>(null);
+  // Form state
+  const [editKey, setEditKey] = useState<string | null>(null);
   const [category, setCategory] = useState('');
   const [subcategory, setSubcategory] = useState('');
-  const [frequency, setFrequency] = useState('Monthly');
+  const [frequency, setFrequency] = useState<Budget['frequency']>('Monthly');
   const [limit, setLimit] = useState('');
 
-  // UI State
-  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  // UI state
+  const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set());
 
-  // Queries
-  const { data: categories } = useCategories();
-  const { data: subcategories } = useSubcategories(category);
-  const { drafts, isLoading, createDraft, updateDraft, deleteDraft, commitDrafts, isCommitting } = useBudgetDrafts(targetMonth);
-  const { data: activeBudgets } = useBudgets();
+  const prevMonth = useMemo(
+    () => format(startOfMonth(subMonths(parseISO(`${month}-01`), 1)), 'yyyy-MM'),
+    [month],
+  );
 
-  const activeBudgetMap = useMemo(() => {
+  const { data: categories } = useCategories(month);
+  const { data: subcategories } = useSubcategories(category, month);
+  const { data: budgets, isLoading } = useBudgets(month);
+  const { data: prevBudgets } = useBudgets(prevMonth);
+
+  const createBudget = useCreateBudget();
+  const updateBudget = useUpdateBudget();
+  const deleteBudget = useDeleteBudget();
+
+  const lines = useMemo(() => budgets ?? [], [budgets]);
+  const inherited = lines.length > 0 && lines[0].inherited;
+  const busy = createBudget.isPending || updateBudget.isPending || deleteBudget.isPending;
+
+  const prevMonthlyEquiv = useMemo(() => {
     const map = new Map<string, number>();
-    if (!activeBudgets) return map;
-    const today = format(new Date(), 'yyyy-MM-dd');
-    for (const b of activeBudgets) {
-      if (b.effective_date <= today && (!b.conclusion_date || b.conclusion_date >= today)) {
-        map.set(`${b.category}|${b.subcategory}`, monthlyEquivalent(b.limit_amount, b.frequency));
-      }
+    for (const b of prevBudgets ?? []) {
+      map.set(b.line_key, monthlyEquivalent(b.limit_amount, b.frequency));
     }
     return map;
-  }, [activeBudgets]);
+  }, [prevBudgets]);
 
   const resetForm = () => {
-    setEditId(null);
+    setEditKey(null);
     setCategory('');
     setSubcategory('');
     setFrequency('Monthly');
     setLimit('');
   };
 
-  const handleRowClick = (d: BudgetDraft) => {
-    setEditId(d.id);
-    setCategory(d.category);
-    setSubcategory(d.subcategory);
-    setFrequency(d.frequency);
-    setLimit(d.limit_amount.toString());
+  // A new month starts from a clean slate — no stale edit or selection.
+  useEffect(() => {
+    setSelectedKeys(new Set());
+    setEditKey(null);
+    setCategory('');
+    setSubcategory('');
+    setFrequency('Monthly');
+    setLimit('');
+  }, [month]);
+
+  const handleRowClick = (line: Budget) => {
+    setEditKey(line.line_key);
+    setCategory(line.category);
+    setSubcategory(line.subcategory);
+    setFrequency(line.frequency);
+    setLimit(line.limit_amount.toString());
   };
 
-  const toggleSelect = (id: number) => {
-    const next = new Set(selectedIds);
-    if (next.has(id)) next.delete(id);
-    else next.add(id);
-    setSelectedIds(next);
+  const toggleSelect = (key: string) => {
+    const next = new Set(selectedKeys);
+    if (next.has(key)) next.delete(key);
+    else next.add(key);
+    setSelectedKeys(next);
   };
 
   const handleDeleteSelected = async () => {
-    const ids = Array.from(selectedIds);
-    for (const id of ids) {
-      await deleteDraft(id);
+    const keys = Array.from(selectedKeys);
+    try {
+      for (const key of keys) {
+        await deleteBudget.mutateAsync({ lineKey: key, month });
+      }
+      setSelectedKeys(new Set());
+      showToast(keys.length === 1 ? 'Budget line deleted' : 'Budget lines deleted', 'success');
+    } catch (e: any) {
+      showToast(e?.message || 'Could not delete the selected lines', 'error');
     }
-    setSelectedIds(new Set());
-    showToast('Drafts deleted', 'success');
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const payload = {
-      target_month: targetMonth,
-      category,
-      subcategory,
-      frequency: frequency as BudgetDraft['frequency'],
-      limit_amount: parseFloat(limit) || 0,
-    };
+    const amount = parseFloat(limit) || 0;
 
-    if (editId) {
-      await updateDraft({ id: editId, data: payload });
-    } else {
-      await createDraft(payload);
-    }
-    resetForm();
-  };
-
-  const handleCommit = async () => {
     try {
-      await commitDrafts();
-      showToast(`Final budget submitted for ${format(parseISO(targetMonth), 'MMM yyyy')}`, 'success');
+      if (editKey) {
+        await updateBudget.mutateAsync({
+          lineKey: editKey,
+          month,
+          data: { category, subcategory, frequency, limit_amount: amount },
+        });
+        showToast('Budget line updated', 'success');
+      } else {
+        await createBudget.mutateAsync({
+          month,
+          category,
+          subcategory,
+          frequency,
+          limit_amount: amount,
+        });
+        showToast('Budget line added', 'success');
+      }
+      resetForm();
     } catch (e: any) {
-      showToast(e.message || 'Error committing drafts', 'error');
+      showToast(e?.message || 'Could not save the budget line', 'error');
     }
   };
 
-  const totalMonthlyBudgeted = drafts.reduce((sum, b) => sum + monthlyEquivalent(b.limit_amount, b.frequency), 0);
+  const monthLabel = format(parseISO(`${month}-01`), 'MMMM yyyy');
+  const prevMonthLabel = format(parseISO(`${prevMonth}-01`), 'MMM yyyy');
+  const totalMonthlyBudgeted = lines.reduce(
+    (sum, b) => sum + monthlyEquivalent(b.limit_amount, b.frequency),
+    0,
+  );
 
   return (
     <div className={styles.container}>
@@ -122,16 +168,11 @@ export const Planning: React.FC = () => {
       <div className={styles.sidebar}>
         <Card padding="lg">
           <div style={{ marginBottom: '1.5rem' }}>
-            <MonthPicker
-              label="Planning Month"
-              value={targetMonth.substring(0, 7)}
-              onChange={(val) => setTargetMonth(`${val}-01`)}
-              required
-            />
+            <MonthPicker label="Budget Month" value={month} onChange={setMonth} required />
           </div>
 
           <h3 style={{ marginTop: '0.5rem', marginBottom: '1rem', fontSize: '1.1rem' }}>
-            {editId ? "Update Draft" : "Add to Draft"}
+            {editKey ? 'Edit Line' : 'Add Line'}
           </h3>
           <form onSubmit={handleSubmit} className={styles.formCard}>
             <Input
@@ -152,13 +193,8 @@ export const Planning: React.FC = () => {
             <Select
               label="Frequency"
               value={frequency}
-              onChange={(e) => setFrequency(e.target.value)}
-              options={[
-                { value: 'Monthly', label: 'Monthly' },
-                { value: 'Quarterly', label: 'Quarterly' },
-                { value: 'Bi-annually', label: 'Bi-annually' },
-                { value: 'Annually', label: 'Annually' }
-              ]}
+              onChange={(e) => setFrequency(e.target.value as Budget['frequency'])}
+              options={FREQUENCIES.map((f) => ({ value: f, label: f }))}
               required
             />
 
@@ -172,10 +208,10 @@ export const Planning: React.FC = () => {
             />
 
             <div className={styles.buttonGroup}>
-              <Button type="submit" style={{ flex: 1 }}>
-                {editId ? 'Update Draft' : 'Add Draft'}
+              <Button type="submit" style={{ flex: 1 }} disabled={busy}>
+                {editKey ? 'Save Line' : 'Add Line'}
               </Button>
-              {editId && (
+              {editKey && (
                 <Button type="button" variant="ghost" onClick={resetForm}>
                   Cancel
                 </Button>
@@ -198,26 +234,37 @@ export const Planning: React.FC = () => {
 
       {/* Main Area */}
       <div className={styles.mainArea}>
-
         {/* Summary Row */}
         <div className={styles.summaryRow}>
           <div className={styles.summaryItem} style={{ flex: 2 }}>
-            <span className={styles.summaryLabel}>Draft Total for {format(parseISO(targetMonth), 'MMMM yyyy')}</span>
+            <span className={styles.summaryLabel}>Total monthly budget — {monthLabel}</span>
             <span className={styles.summaryValue}>{formatCurrency(totalMonthlyBudgeted)}</span>
-          </div>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', flex: 1 }}>
-            <Button onClick={handleCommit} loading={isCommitting} style={{ width: '100%' }}>
-              Submit Final Budget
-            </Button>
           </div>
         </div>
 
-        {/* Section 1: Active Drafts */}
+        {inherited && (
+          <div
+            style={{
+              marginBottom: '1rem',
+              padding: '0.75rem 1rem',
+              borderRadius: '6px',
+              background: 'var(--color-surface-raised)',
+              color: 'var(--color-text-muted)',
+              fontSize: '0.9rem',
+            }}
+          >
+            {monthLabel} follows {prevMonthLabel} and has not been confirmed. An edit here
+            carries forward to later months until they are changed — it never affects{' '}
+            {prevMonthLabel} or earlier.
+          </div>
+        )}
+
+        {/* Lines */}
         <div className={styles.section}>
           <div className={styles.sectionHeader}>
-            <h2 className={styles.sectionTitle}>Budget Drafts</h2>
-            {selectedIds.size > 0 && (
-              <Button variant="danger" size="sm" onClick={handleDeleteSelected}>
+            <h2 className={styles.sectionTitle}>Budget Lines</h2>
+            {selectedKeys.size > 0 && (
+              <Button variant="danger" size="sm" onClick={handleDeleteSelected} disabled={busy}>
                 <Trash2 size={16} style={{ marginRight: 6 }} />
                 Delete Selected
               </Button>
@@ -231,49 +278,73 @@ export const Planning: React.FC = () => {
                     <input
                       type="checkbox"
                       className={styles.checkbox}
-                      checked={selectedIds.size === drafts.length && drafts.length > 0}
+                      checked={selectedKeys.size === lines.length && lines.length > 0}
                       onChange={(e) => {
-                        if (e.target.checked) setSelectedIds(new Set(drafts.map((d) => d.id)));
-                        else setSelectedIds(new Set());
+                        if (e.target.checked) setSelectedKeys(new Set(lines.map((l) => l.line_key)));
+                        else setSelectedKeys(new Set());
                       }}
                     />
                   </th>
                   <th>Category</th>
                   <th>Subcategory</th>
                   <th>Frequency</th>
+                  <th className={styles.amountCell}>Amount / period</th>
                   <th className={styles.amountCell}>Monthly Equiv</th>
-                  <th className={styles.amountCell}>Change</th>
+                  <th className={styles.amountCell}>Change vs {prevMonthLabel}</th>
                 </tr>
               </thead>
               <tbody>
                 {isLoading ? (
-                  <tr><td colSpan={6} style={{ textAlign: 'center', padding: '1rem' }}>Loading...</td></tr>
-                ) : drafts.length === 0 ? (
-                  <tr><td colSpan={6} style={{ textAlign: 'center', padding: '1rem' }}>No drafts.</td></tr>
+                  <tr>
+                    <td colSpan={7} style={{ textAlign: 'center', padding: '1rem' }}>
+                      Loading...
+                    </td>
+                  </tr>
+                ) : lines.length === 0 ? (
+                  <tr>
+                    <td colSpan={7} style={{ textAlign: 'center', padding: '1rem' }}>
+                      No budget lines for {monthLabel}.
+                    </td>
+                  </tr>
                 ) : (
-                  drafts.map(d => {
-                    const equiv = monthlyEquivalent(d.limit_amount, d.frequency);
-                    const activeEquiv = activeBudgetMap.get(`${d.category}|${d.subcategory}`) || 0;
-                    const diff = equiv - activeEquiv;
+                  lines.map((line) => {
+                    const equiv = monthlyEquivalent(line.limit_amount, line.frequency);
+                    const prevEquiv = prevMonthlyEquiv.get(line.line_key) ?? 0;
+                    const diff = equiv - prevEquiv;
 
                     return (
-                      <tr key={d.id} className={selectedIds.has(d.id) ? styles.selected : ''} onClick={() => handleRowClick(d)}>
+                      <tr
+                        key={line.line_key}
+                        className={editKey === line.line_key ? styles.selected : ''}
+                        onClick={() => handleRowClick(line)}
+                      >
                         <td onClick={(e) => e.stopPropagation()}>
                           <input
                             type="checkbox"
                             className={styles.checkbox}
-                            checked={selectedIds.has(d.id)}
-                            onChange={() => toggleSelect(d.id)}
+                            checked={selectedKeys.has(line.line_key)}
+                            onChange={() => toggleSelect(line.line_key)}
                           />
                         </td>
-                        <td>{d.category}</td>
-                        <td>{d.subcategory}</td>
-                        <td>{d.frequency}</td>
+                        <td>{line.category}</td>
+                        <td>{line.subcategory}</td>
+                        <td>{line.frequency}</td>
+                        <td className={styles.amountCell}>{formatCurrency(line.limit_amount)}</td>
                         <td className={styles.amountCell}>{formatCurrency(equiv)}</td>
                         <td className={styles.amountCell}>
-                          {diff > 0.01 && <span style={{ color: 'var(--color-danger)' }}>+{formatCurrency(diff)}</span>}
-                          {diff < -0.01 && <span style={{ color: 'var(--color-success)' }}>{formatCurrency(diff)}</span>}
-                          {Math.abs(diff) <= 0.01 && <span style={{ color: 'var(--color-text-muted)' }}>No change</span>}
+                          {diff > 0.01 && (
+                            <span style={{ color: 'var(--color-danger)' }}>
+                              +{formatCurrency(diff)}
+                            </span>
+                          )}
+                          {diff < -0.01 && (
+                            <span style={{ color: 'var(--color-success)' }}>
+                              {formatCurrency(diff)}
+                            </span>
+                          )}
+                          {Math.abs(diff) <= 0.01 && (
+                            <span style={{ color: 'var(--color-text-muted)' }}>No change</span>
+                          )}
                         </td>
                       </tr>
                     );
@@ -283,7 +354,6 @@ export const Planning: React.FC = () => {
             </table>
           </div>
         </div>
-
       </div>
     </div>
   );

@@ -4,7 +4,7 @@ routers/categories.py — Category identity and active category querying.
 Routes:
     GET   /api/categories/active    active budget lines' category/subcategory/frequency for a month
     GET   /api/categories           list all category surrogate records
-    PATCH /api/categories/{id}      rename a category surrogate record (dual-writes legacy string columns)
+    PATCH /api/categories/{id}      rename a category surrogate record (dual-writes expenses' string columns)
 
 Internal API
 ~~~~~~~~~~~~
@@ -21,11 +21,12 @@ overwritten.
 from __future__ import annotations
 
 import sqlite3
-from datetime import date, timedelta
+from datetime import date
 from typing import Optional
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
+import budget_store
 from database import get_db
 
 router = APIRouter(prefix="/api/categories", tags=["categories"])
@@ -105,13 +106,6 @@ def _resolve_month(month_str: Optional[str]) -> tuple[int, int]:
     return today.year, today.month
 
 
-def _last_day(year: int, month: int) -> date:
-    """Last day of the given calendar month."""
-    if month == 12:
-        return date(year + 1, 1, 1) - timedelta(days=1)
-    return date(year, month + 1, 1) - timedelta(days=1)
-
-
 # ── Routes ───────────────────────────────────────────────────────────────────
 
 
@@ -122,24 +116,33 @@ def list_active_categories(
     ),
 ) -> list[dict]:
     """
-    Return active budget lines' category/subcategory/frequency for the specified month.
+    Active budget lines' category/subcategory/frequency for a month.
+
+    Lines in effect for the month (``budget_store.resolve_view``), so suggestions
+    reflect what the planner would show — a read, never a write.
     """
     y, m = _resolve_month(month)
-    first_day = f"{y:04d}-{m:02d}-01"
-    last_day = _last_day(y, m).isoformat()
+    month_str = f"{y:04d}-{m:02d}"
 
     with get_db() as conn:
-        rows = conn.execute(
-            """SELECT id as budget_id, category, subcategory, frequency, category_id, subcategory_id
-               FROM budgets
-               WHERE limit_amount > 0
-                 AND effective_date <= ?
-                 AND (conclusion_date IS NULL OR conclusion_date >= ?)
-               ORDER BY category, subcategory""",
-            (last_day, first_day),
-        ).fetchall()
+        rows, _inherited = budget_store.resolve_view(conn, month_str)
 
-    return [dict(r) for r in rows]
+    rows = sorted(
+        (r for r in rows if r["limit_amount"] > 0),
+        key=lambda r: (r["category"], r["subcategory"]),
+    )
+    return [
+        {
+            "budget_id": r["id"],
+            "line_key": r["line_key"],
+            "category": r["category"],
+            "subcategory": r["subcategory"],
+            "frequency": r["frequency"],
+            "category_id": r["category_id"],
+            "subcategory_id": r["subcategory_id"],
+        }
+        for r in rows
+    ]
 
 
 @router.get("")
@@ -174,8 +177,8 @@ def update_category(category_id: int, body: CategoryUpdate) -> dict:
     clobbering a user's manual recategorisation, which changes the string but
     leaves the original id in place.
 
-    Tables covered: `categories`, `budgets`, `expenses`.
-    Not covered (deferred, will be retired in Phase 4): `budget_drafts`.
+    Tables covered: `categories` (budget lines read their names from it, so they follow
+    automatically) and `expenses`.
     Not covered (deferred, will be retired in Phase 3): `goal_budget_links`.
     """
     new_name = body.name.strip()
@@ -209,22 +212,17 @@ def update_category(category_id: int, body: CategoryUpdate) -> dict:
         # the user after the last backfill — leave it alone.
         if kind == "category":
             conn.execute(
-                "UPDATE budgets SET category = ? WHERE category_id = ? AND category = ?",
-                (new_name, category_id, old_name),
-            )
-            conn.execute(
                 "UPDATE expenses SET category = ? WHERE category_id = ? AND category = ?",
                 (new_name, category_id, old_name),
             )
         else:  # subcategory
             conn.execute(
-                "UPDATE budgets SET subcategory = ? WHERE subcategory_id = ? AND subcategory = ?",
-                (new_name, category_id, old_name),
-            )
-            conn.execute(
                 "UPDATE expenses SET subcategory = ? WHERE subcategory_id = ? AND subcategory = ?",
                 (new_name, category_id, old_name),
             )
+
+        # Budget lines hold only category ids and read their names from `categories`,
+        # so the rename above has already reached every month of every line.
 
         conn.commit()
 

@@ -13,6 +13,11 @@ spend. Budgets and expenses are matched by (category, subcategory) name, so the
 only thing keeping the two partitions from influencing each other is the
 partition itself — these tests pin that boundary.
 
+Budgets are versioned lines (2026-10-25 model). A line is active from its first
+version until it is ended, so a non-monthly line's accrual window starts at the first
+month *within its period* where it is active — the equivalent of the old
+mid-period `effective_date` rule.
+
 The database is built on a temp path, never `data/budget.db`.
 """
 
@@ -24,6 +29,7 @@ import pytest
 # Allow imports from backend/ when running tests from project root
 sys.path.insert(0, str(Path(__file__).parent.parent / "backend"))
 
+import budget_store
 import database
 from migrations import run_migrations
 from routers.reporting import budget_summary
@@ -31,8 +37,9 @@ from routers.reporting import budget_summary
 
 MONTH = "2025-03"
 
-MONTHLY_LINE = ("Food", "Groceries", 500.0, "Monthly", "2025-01-01", None)
-ANNUAL_LINE = ("Auto", "Maintenance", 1200.0, "Annually", "2025-01-01", None)
+# (category, subcategory, limit, frequency, first_month, last_month)
+MONTHLY_LINE = ("Food", "Groceries", 500.0, "Monthly", "2025-03", "2025-03")
+ANNUAL_LINE = ("Auto", "Maintenance", 1200.0, "Annually", "2025-01", "2025-03")
 
 MONTHLY_EXPENSE = (
     "2025-03-10",
@@ -67,12 +74,18 @@ def db_path(tmp_path, monkeypatch):
 
 def _insert(db_path, budgets=(), expenses=()):
     conn = database.get_db()
-    conn.executemany(
-        """INSERT INTO budgets
-             (category, subcategory, limit_amount, frequency, effective_date, conclusion_date)
-           VALUES (?,?,?,?,?,?)""",
-        budgets,
-    )
+    for category, subcategory, limit, frequency, start, end in budgets:
+        # A line active from `start` through `end` and ended afterwards.
+        budget_store.insert_line(
+            conn,
+            start,
+            category=category,
+            subcategory=subcategory,
+            limit_amount=limit,
+            frequency=frequency,
+            apply="through",
+            through=end,
+        )
     conn.executemany(
         """INSERT INTO expenses
              (date, description, category, subcategory, amount, payer, expense_type)
@@ -131,7 +144,7 @@ class TestPartitionBoundary:
     def test_quarterly_period_is_calendar_aligned(self, db_path):
         _insert(
             db_path,
-            [("Auto", "Oil", 300.0, "Quarterly", "2025-01-01", None)],
+            [("Auto", "Oil", 300.0, "Quarterly", "2025-01", "2025-02")],
             [],
         )
         row = _line(budget_summary("2025-02")["non_monthly"], "Auto", "Oil")
@@ -266,16 +279,17 @@ class TestNonMonthlyAccrual:
         assert row["status"] == "Over"
         assert row["remaining"] < 0
 
-    def test_accrual_starts_at_effective_date_when_mid_period(self, db_path):
-        # A quarterly line effective mid-quarter does not accrue spend from
-        # before it existed.
+    def test_accrual_starts_at_first_month_the_line_appears(self, db_path):
+        # A quarterly line that appears only from 2025-02 does not accrue spend
+        # from before it existed — the per-month equivalent of the old
+        # mid-period `effective_date` clamp.
         _insert(
             db_path,
-            [("Auto", "Oil", 300.0, "Quarterly", "2025-02-01", None)],
+            [("Auto", "Oil", 300.0, "Quarterly", "2025-02", "2025-02")],
             [
                 (
                     "2025-01-10",
-                    "Before effective",
+                    "Before the line appears",
                     "Auto",
                     "Oil",
                     100.0,

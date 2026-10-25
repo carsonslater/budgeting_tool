@@ -186,11 +186,11 @@ class TestRunner:
         assert versions == sorted(set(versions))
         assert LATEST_VERSION == versions[-1]
 
-    def test_contract_version_is_two(self):
-        assert LATEST_VERSION == 2
+    def test_contract_version_is_three(self):
+        assert LATEST_VERSION == 3
 
     def test_applies_every_version_from_zero(self, conn):
-        assert run_migrations(conn) == [1, 2]
+        assert run_migrations(conn) == [1, 2, 3]
         assert get_user_version(conn) == LATEST_VERSION
 
     def test_second_run_is_a_noop(self, migrated):
@@ -198,10 +198,10 @@ class TestRunner:
         assert get_user_version(migrated) == LATEST_VERSION
 
     def test_skips_already_applied_versions(self, conn):
-        # Pretend version 1 is done; only 2 should run.
+        # Pretend version 1 is done; 2 and 3 should run.
         run_migrations(conn, MIGRATIONS[:1])
         assert get_user_version(conn) == 1
-        assert run_migrations(conn) == [2]
+        assert run_migrations(conn) == [2, 3]
 
     def test_rejects_a_connection_with_pending_work(self, conn):
         conn.execute(
@@ -422,3 +422,341 @@ class TestMigration2:
         """Expand-only: reads still depend on the strings until the contract step."""
         assert column_exists(migrated, "expenses", "category")
         assert column_exists(migrated, "budgets", "category")
+
+
+# ---------------------------------------------------------------------------
+# Migration 3 — versioned budgets (expand only)
+# ---------------------------------------------------------------------------
+
+
+def _add_legacy_budgets(conn, rows):
+    """Insert legacy rows and resolve their surrogate ids, as `migrate.py` does."""
+    from migrations.m0002_category_identity import backfill_ids, backfill_names
+
+    conn.executemany(
+        """INSERT INTO budgets
+             (category, subcategory, limit_amount, frequency, effective_date, conclusion_date)
+           VALUES (?,?,?,?,?,?)""",
+        rows,
+    )
+    backfill_names(conn)
+    backfill_ids(conn)
+    conn.commit()
+
+
+def _at_v2(conn, rows):
+    """A database at version 2 holding the given legacy budget rows."""
+    run_migrations(conn, MIGRATIONS[:2])
+    _add_legacy_budgets(conn, rows)
+    return conn
+
+
+def _expand(conn):
+    """Run just the expansion step and return its summary."""
+    from migrations.m0003_per_month_budgets import create_tables, expand
+
+    create_tables(conn)
+    summary = expand(conn)
+    conn.commit()
+    return summary
+
+
+def _store_view(conn, month):
+    """{(category_id, subcategory_id): (amount, frequency)} read straight from the tables."""
+    rows = conn.execute(
+        """SELECT l.category_id, l.subcategory_id, a.amount, l.frequency
+           FROM budget_lines l
+           JOIN budget_amounts a
+             ON a.line_key = l.line_key
+            AND a.effective_month = (SELECT MAX(effective_month) FROM budget_amounts
+                                     WHERE line_key = l.line_key AND effective_month <= ?)
+           WHERE a.amount IS NOT NULL""",
+        (month,),
+    ).fetchall()
+    return {(r[0], r[1]): (r[2], r[3]) for r in rows}
+
+
+def _legacy_view(conn, month):
+    """
+    The old window predicate, restated independently of the migration.
+
+    Comparing against ``YYYY-MM-31`` is equivalent to comparing against the real last
+    day for any valid date, so no calendar arithmetic is shared with the migration.
+    """
+    first, last = f"{month}-01", f"{month}-31"
+    best = {}
+    for row in conn.execute(
+        """SELECT id, limit_amount, frequency, effective_date, conclusion_date,
+                  category_id, subcategory_id FROM budgets"""
+    ):
+        _id, limit, freq, eff, concl, cat, sub = row
+        if eff > last or (concl is not None and concl < first):
+            continue
+        key = (cat, sub)
+        if key not in best or (eff, _id) > best[key][0]:
+            best[key] = ((eff, _id), (limit, freq))
+    return {k: v[1] for k, v in best.items()}
+
+
+def _versions(conn, category, subcategory=""):
+    """[(effective_month, amount)] for the line matching a category/subcategory name."""
+    rows = conn.execute(
+        """SELECT a.effective_month, a.amount
+           FROM budget_lines l
+           JOIN categories c ON c.id = l.category_id
+           LEFT JOIN categories s ON s.id = l.subcategory_id
+           JOIN budget_amounts a ON a.line_key = l.line_key
+           WHERE c.name = ? AND COALESCE(s.name, '') = ?
+           ORDER BY a.effective_month""",
+        (category, subcategory),
+    ).fetchall()
+    return [(r[0], r[1]) for r in rows]
+
+
+class TestMigration3:
+    def test_creates_the_versioned_tables_and_no_month_tables(self, migrated):
+        for name in ("budget_lines", "budget_amounts", "month_plans"):
+            assert table_exists(migrated, name)
+        assert index_exists(migrated, "uq_budget_lines_target")
+        month_tables = migrated.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' "
+            "AND name GLOB 'budget_[0-9][0-9][0-9][0-9]_[0-9][0-9]'"
+        ).fetchall()
+        assert month_tables == []
+
+    def test_matches_the_legacy_predicate_in_every_month(self, migrated):
+        for year in (2024, 2025, 2026, 2027):
+            for mon in range(1, 13):
+                month = f"{year}-{mon:02d}"
+                assert _store_view(migrated, month) == _legacy_view(migrated, month), (
+                    month
+                )
+
+    def test_open_ended_lines_are_stored_sparsely(self, migrated):
+        # Three open-ended legacy lines: one line and one version each, however long
+        # the history runs.
+        assert migrated.execute("SELECT COUNT(*) FROM budget_lines").fetchone()[0] == 3
+        assert (
+            migrated.execute("SELECT COUNT(*) FROM budget_amounts").fetchone()[0] == 3
+        )
+
+    def test_distinct_lines_get_distinct_keys(self, migrated):
+        keys = {r[0] for r in migrated.execute("SELECT line_key FROM budget_lines")}
+        assert len(keys) == 3
+
+    def test_line_key_is_unique(self, migrated):
+        key = migrated.execute("SELECT line_key FROM budget_lines LIMIT 1").fetchone()[
+            0
+        ]
+        spare = migrated.execute(
+            "INSERT INTO categories (name, kind, created_date) "
+            "VALUES ('Spare', 'category', '2025-01-01')"
+        ).lastrowid
+        with pytest.raises(sqlite3.IntegrityError, match="line_key"):
+            migrated.execute(
+                "INSERT INTO budget_lines (line_key, category_id, frequency, created_at) "
+                "VALUES (?, ?, 'Monthly', 'x')",
+                (key, spare),
+            )
+
+    def test_one_line_per_category_subcategory(self, migrated):
+        cat_id, sub_id = migrated.execute(
+            "SELECT category_id, subcategory_id FROM budget_lines LIMIT 1"
+        ).fetchone()
+        with pytest.raises(sqlite3.IntegrityError):
+            migrated.execute(
+                "INSERT INTO budget_lines (line_key, category_id, subcategory_id, "
+                "frequency, created_at) VALUES ('dup', ?, ?, 'Monthly', 'x')",
+                (cat_id, sub_id),
+            )
+
+    def test_lines_carry_surrogate_ids_of_the_right_kind(self, migrated):
+        cat_id, sub_id = migrated.execute(
+            """SELECT l.category_id, l.subcategory_id FROM budget_lines l
+               JOIN categories c ON c.id = l.category_id
+               JOIN categories s ON s.id = l.subcategory_id
+               WHERE c.name = 'Food' AND s.name = 'Auto'"""
+        ).fetchone()
+        kinds = dict(
+            migrated.execute(
+                "SELECT id, kind FROM categories WHERE id IN (?, ?)", (cat_id, sub_id)
+            )
+        )
+        assert kinds[cat_id] == "category"
+        assert kinds[sub_id] == "subcategory"
+
+    def test_blank_subcategory_is_null(self, migrated):
+        sub_id = migrated.execute(
+            """SELECT l.subcategory_id FROM budget_lines l
+               JOIN categories c ON c.id = l.category_id
+               WHERE c.name = 'Auto'"""
+        ).fetchone()[0]
+        assert sub_id is None
+
+    def test_frequency_and_amount_are_preserved(self, migrated):
+        row = migrated.execute(
+            """SELECT l.frequency, a.amount FROM budget_lines l
+               JOIN categories c ON c.id = l.category_id
+               JOIN budget_amounts a ON a.line_key = l.line_key
+               WHERE c.name = 'Travel'"""
+        ).fetchone()
+        assert row[0] == "Annually"
+        assert row[1] == 1200.0
+
+    def test_conclusion_ends_the_line_with_a_tombstone(self, conn):
+        _at_v2(
+            conn,
+            [
+                ("Old Thing", "", 50.0, "Monthly", "2025-01-01", "2025-02-28"),
+                ("Rent", "", 1000.0, "Monthly", "2025-01-01", None),
+            ],
+        )
+        run_migrations(conn)
+
+        # Active through February, ended from March, and it stays ended.
+        assert _versions(conn, "Old Thing") == [("2025-01", 50.0), ("2025-03", None)]
+        cat_id = conn.execute(
+            "SELECT id FROM categories WHERE name='Old Thing'"
+        ).fetchone()[0]
+        assert (cat_id, None) in _store_view(conn, "2025-02")
+        for month in ("2025-03", "2026-01", "2030-12"):
+            assert (cat_id, None) not in _store_view(conn, month)
+
+    def test_a_mid_month_conclusion_keeps_that_month(self, conn):
+        _at_v2(conn, [("Old Thing", "", 50.0, "Monthly", "2025-01-01", "2025-02-10")])
+        run_migrations(conn)
+        assert _versions(conn, "Old Thing") == [("2025-01", 50.0), ("2025-03", None)]
+
+    def test_limit_change_is_one_line_with_two_versions(self, conn):
+        _at_v2(
+            conn,
+            [
+                ("Rent", "", 1000.0, "Monthly", "2025-01-01", "2025-03-31"),
+                ("Rent", "", 1200.0, "Monthly", "2025-04-01", None),
+            ],
+        )
+        run_migrations(conn)
+
+        assert conn.execute("SELECT COUNT(*) FROM budget_lines").fetchone()[0] == 1
+        assert _versions(conn, "Rent") == [("2025-01", 1000.0), ("2025-04", 1200.0)]
+
+    def test_gap_then_restart_keeps_the_same_line(self, conn):
+        _at_v2(
+            conn,
+            [
+                ("Gym", "", 100.0, "Monthly", "2025-01-01", "2025-02-28"),
+                ("Gym", "", 150.0, "Monthly", "2025-05-01", None),
+            ],
+        )
+        run_migrations(conn)
+
+        assert conn.execute("SELECT COUNT(*) FROM budget_lines").fetchone()[0] == 1
+        assert _versions(conn, "Gym") == [
+            ("2025-01", 100.0),
+            ("2025-03", None),
+            ("2025-05", 150.0),
+        ]
+
+    def test_overlapping_windows_latest_effective_date_wins(self, conn):
+        _at_v2(
+            conn,
+            [
+                ("Food", "", 100.0, "Monthly", "2025-01-01", "2025-12-31"),
+                ("Food", "", 200.0, "Monthly", "2025-04-01", None),
+            ],
+        )
+        run_migrations(conn)
+
+        cat_id = conn.execute("SELECT id FROM categories WHERE name='Food'").fetchone()[
+            0
+        ]
+        assert _store_view(conn, "2025-02")[(cat_id, None)][0] == 100.0
+        # After the first window ends the second is still in force.
+        assert _store_view(conn, "2025-05")[(cat_id, None)][0] == 200.0
+        assert _store_view(conn, "2026-03")[(cat_id, None)][0] == 200.0
+        for month in ("2025-01", "2025-04", "2025-12", "2026-01"):
+            assert _store_view(conn, month) == _legacy_view(conn, month)
+
+    def test_a_never_active_row_creates_no_line(self, conn):
+        _at_v2(
+            conn,
+            [
+                ("Ghost", "", 75.0, "Monthly", "2026-07-01", "2026-06-30"),
+                ("Real", "", 10.0, "Monthly", "2026-01-01", None),
+            ],
+        )
+        summary = _expand(conn)
+
+        assert summary["never_active"] == 1
+        assert summary["lines"] == 1
+        assert _versions(conn, "Ghost") == []
+
+    def test_the_most_recent_frequency_wins_and_earlier_amounts_convert(self, conn):
+        _at_v2(
+            conn,
+            [
+                ("Insurance", "", 100.0, "Monthly", "2025-01-01", "2025-05-31"),
+                ("Insurance", "", 1500.0, "Annually", "2025-06-01", None),
+            ],
+        )
+        summary = _expand(conn)
+
+        freq = conn.execute("SELECT frequency FROM budget_lines").fetchone()[0]
+        assert freq == "Annually"
+        # 100/month == 1200/year, preserved rather than reread as 100/year.
+        assert _versions(conn, "Insurance") == [
+            ("2025-01", 1200.0),
+            ("2025-06", 1500.0),
+        ]
+        assert summary["converted"] == 1
+
+    def test_an_unchanged_monthly_equivalent_collapses_to_one_version(self, conn):
+        _at_v2(
+            conn,
+            [
+                ("Insurance", "", 100.0, "Monthly", "2025-01-01", "2025-05-31"),
+                ("Insurance", "", 1200.0, "Annually", "2025-06-01", None),
+            ],
+        )
+        _expand(conn)
+        assert _versions(conn, "Insurance") == [("2025-01", 1200.0)]
+
+    def test_unrepresentable_rows_are_skipped_and_counted(self, conn):
+        _at_v2(
+            conn,
+            [
+                ("", "", 10.0, "Monthly", "2025-01-01", None),
+                ("Real", "", 20.0, "Monthly", "2025-01-01", None),
+            ],
+        )
+        summary = _expand(conn)
+
+        assert summary["skipped"] == 1
+        assert summary["lines"] == 1
+
+    def test_a_malformed_date_fails_and_rolls_back(self, conn):
+        _at_v2(conn, [("Rent", "", 10.0, "Monthly", "not-a-date", None)])
+        with pytest.raises(ValueError, match="invalid date"):
+            run_migrations(conn)
+
+        assert get_user_version(conn) == 2
+        assert not table_exists(conn, "budget_lines")
+
+    def test_rerunning_the_migration_changes_nothing(self, migrated):
+        def snapshot():
+            def rows(table):
+                return sorted(
+                    tuple(r) for r in migrated.execute(f"SELECT * FROM {table}")
+                )
+
+            return rows("budget_lines"), rows("budget_amounts")
+
+        before = snapshot()
+        migrated.execute("PRAGMA user_version = 2;")
+        assert run_migrations(migrated) == [3]
+        assert snapshot() == before
+
+    def test_legacy_tables_are_left_intact(self, migrated):
+        assert table_exists(migrated, "budgets")
+        assert migrated.execute("SELECT COUNT(*) FROM budgets").fetchone()[0] == 3
+        assert table_exists(migrated, "budget_drafts")

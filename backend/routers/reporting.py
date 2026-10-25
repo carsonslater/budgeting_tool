@@ -15,6 +15,12 @@ pro-rating and no time-proration. The explicit partition means an annual or
 quarterly line can never distort a recurring monthly line's status, totals, or
 remaining budget. Trends stay *true cash flow* — a once-a-year spike is real and
 should remain visible.
+
+Versioned budgets (Phase 4 pivot): a month's lines come from `budget_store`, and
+a non-monthly line is active in every month from its first version until it
+is ended, so its accrual window starts at the first month *within the period*
+where the line is active — the versioned-model equivalent of the old
+`effective_date` mid-period rule.
 """
 
 from __future__ import annotations
@@ -23,6 +29,7 @@ from datetime import date, timedelta
 from typing import Optional
 from fastapi import APIRouter, Query
 
+import budget_store
 from budget_math import monthly_equivalent
 from database import get_db
 
@@ -95,6 +102,19 @@ def _spent_between(
     return row["spent"]
 
 
+def _accrual_start(period_start: date, months: list[str]) -> date:
+    """
+    First day of the earliest month the line appears in, floored at the period.
+
+    A line added mid-period does not accrue spend from before it existed; this
+    is the versioned-model equivalent of the old `effective_date` clamp.
+    """
+    if not months:
+        return period_start
+    month_start = date.fromisoformat(f"{min(months)}-01")
+    return max(period_start, month_start)
+
+
 # ── Routes ───────────────────────────────────────────────────────────────────
 
 
@@ -121,62 +141,82 @@ def budget_summary(
     The explicit partition means the client cannot silently re-mix the two.
     """
     y, m = _resolve_month(month)
+    month_str = f"{y:04d}-{m:02d}"
     first = date(y, m, 1).isoformat()
     last = _last_day(y, m).isoformat()
 
     with get_db() as conn:
-        # Active budgets during this month
-        budgets = conn.execute(
-            """SELECT * FROM budgets
-               WHERE limit_amount > 0
-                 AND effective_date <= ?
-                 AND (conclusion_date IS NULL OR conclusion_date >= ?)
-               ORDER BY category, subcategory""",
-            (last, first),
-        ).fetchall()
+        lines, _inherited = budget_store.resolve_view(conn, month_str)
+        lines = [line for line in lines if line["limit_amount"] > 0]
+        lines.sort(key=lambda line: (line["category"], line["subcategory"]))
+
+        non_monthly_lines = [l for l in lines if l["frequency"] != "Monthly"]
+
+        # Accrual start per non-monthly line: the first month *within its own
+        # calendar period* where the line appears. One cross-month read covers
+        # every line's window (they all end at the requested month).
+        periods = {
+            line["line_key"]: _period_bounds(line["frequency"], y, m)
+            for line in non_monthly_lines
+        }
+        months_by_line: dict[str, list[str]] = {}
+        if periods:
+            earliest = min(period_start for period_start, _ in periods.values())
+            months_by_line = budget_store.months_by_line(
+                conn,
+                f"{earliest.year:04d}-{earliest.month:02d}",
+                month_str,
+            )
 
         monthly: list[dict] = []
         non_monthly: list[dict] = []
 
-        for b in budgets:
-            if b["frequency"] == "Monthly":
+        for line in lines:
+            key = line["line_key"]
+            if line["frequency"] == "Monthly":
                 spent = _spent_between(
-                    conn, b["category"], b["subcategory"], first, last
+                    conn, line["category"], line["subcategory"], first, last
                 )
-                limit = monthly_equivalent(b["limit_amount"], b["frequency"])
+                limit = monthly_equivalent(line["limit_amount"], line["frequency"])
                 monthly.append(
                     {
-                        "budget_id": b["id"],
-                        "category": b["category"],
-                        "subcategory": b["subcategory"],
+                        "budget_id": line["id"],
+                        "line_key": key,
+                        "category": line["category"],
+                        "subcategory": line["subcategory"],
                         "budget": limit,
                         "spent": round(spent, 2),
                         "remaining": round(limit - spent, 2),
                         "status": _status(spent, limit),
-                        "frequency": b["frequency"],
+                        "frequency": line["frequency"],
                     }
                 )
             else:
-                # Accrue across the calendar period, from its start (or the
-                # line's own effective date if that begins mid-period) through
-                # the end of the requested month. Compare against the full
-                # per-period limit — no time-proration.
-                period_start, period_end = _period_bounds(b["frequency"], y, m)
-                accrue_from = max(period_start, date.fromisoformat(b["effective_date"]))
+                # Accrue across the calendar period, from the first month the
+                # line appears in within that period, through the end of the
+                # requested month. Compare against the full per-period limit —
+                # no time-proration.
+                period_start, period_end = periods[key]
+                accrue_from = _accrual_start(period_start, months_by_line.get(key, []))
                 spent = _spent_between(
-                    conn, b["category"], b["subcategory"], accrue_from.isoformat(), last
+                    conn,
+                    line["category"],
+                    line["subcategory"],
+                    accrue_from.isoformat(),
+                    last,
                 )
-                limit = round(b["limit_amount"], 2)
+                limit = round(line["limit_amount"], 2)
                 non_monthly.append(
                     {
-                        "budget_id": b["id"],
-                        "category": b["category"],
-                        "subcategory": b["subcategory"],
+                        "budget_id": line["id"],
+                        "line_key": key,
+                        "category": line["category"],
+                        "subcategory": line["subcategory"],
                         "budget": limit,
                         "spent": round(spent, 2),
                         "remaining": round(limit - spent, 2),
                         "status": _status(spent, limit),
-                        "frequency": b["frequency"],
+                        "frequency": line["frequency"],
                         "period_start": period_start.isoformat(),
                         "period_end": period_end.isoformat(),
                     }

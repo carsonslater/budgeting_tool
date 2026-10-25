@@ -16,6 +16,7 @@ The database is built on a temp path, never `data/budget.db`.
 
 import sqlite3
 import sys
+from datetime import date
 from pathlib import Path
 
 import pytest
@@ -24,6 +25,7 @@ from fastapi.testclient import TestClient
 # Allow imports from backend/ when running tests from project root
 sys.path.insert(0, str(Path(__file__).parent.parent / "backend"))
 
+import budget_store
 import database
 from main import app
 from migrations import run_migrations
@@ -47,20 +49,35 @@ def client(db_path):
     return TestClient(app)
 
 
+def _budget_rows(conn):
+    """Every row of every budget table, for 'nothing was written' assertions."""
+    return {
+        table: sorted(tuple(r) for r in conn.execute(f"SELECT * FROM {table}"))
+        for table in ("budget_lines", "budget_amounts", "month_plans")
+    }
+
+
 # ── Active categories endpoint ────────────────────────────────────────────────
 
 
 def test_active_categories(client, db_path):
-    """GET /api/categories/active only returns budget lines active in the target month."""
+    """GET /api/categories/active returns only lines present in the target month."""
     with database.get_db() as conn:
-        conn.execute(
-            """INSERT INTO budgets (category, subcategory, limit_amount, frequency, effective_date)
-               VALUES ('Food', 'Groceries', 500, 'Monthly', '2025-01-01')"""
+        budget_store.insert_line(
+            conn,
+            "2025-03",
+            category="Food",
+            subcategory="Groceries",
+            limit_amount=500,
         )
-        # Concluded before 2025-03 — must not appear
-        conn.execute(
-            """INSERT INTO budgets (category, subcategory, limit_amount, frequency, effective_date, conclusion_date)
-               VALUES ('OldCategory', 'Sub', 200, 'Monthly', '2024-01-01', '2024-12-31')"""
+        # Stopped before 2025-03 — active only in 2024-12, so absent from 2025-03.
+        budget_store.insert_line(
+            conn,
+            "2024-12",
+            category="OldCategory",
+            subcategory="Sub",
+            limit_amount=200,
+            apply="month",
         )
         conn.commit()
 
@@ -70,6 +87,32 @@ def test_active_categories(client, db_path):
     assert len(data) == 1
     assert data[0]["category"] == "Food"
     assert data[0]["subcategory"] == "Groceries"
+
+
+def test_active_categories_inherits_without_writing(client, db_path):
+    """
+    A month with no edits of its own resolves to the lines in force from earlier
+    months, and the read must not write anything (defect F7).
+    """
+    with database.get_db() as conn:
+        budget_store.insert_line(
+            conn,
+            "2025-03",
+            category="Food",
+            subcategory="Groceries",
+            limit_amount=500,
+        )
+        conn.commit()
+
+    with database.get_db() as conn:
+        before = _budget_rows(conn)
+
+    response = client.get("/api/categories/active?month=2025-04")
+    assert response.status_code == 200
+    assert [r["category"] for r in response.json()] == ["Food"]
+
+    with database.get_db() as conn:
+        assert _budget_rows(conn) == before
 
 
 # ── resolve_category_ids helper ───────────────────────────────────────────────
@@ -321,9 +364,12 @@ def test_import_confirm_carries_category_id(client, db_path):
 def test_auto_categorize_expense_descriptions_only(db_path):
     """_auto_categorize returns a match when an expense description exists for an active budget line."""
     with database.get_db() as conn:
-        conn.execute(
-            """INSERT INTO budgets (category, subcategory, limit_amount, effective_date)
-               VALUES ('Food', 'Groceries', 500, '2020-01-01')"""
+        budget_store.insert_line(
+            conn,
+            date.today().strftime("%Y-%m"),
+            category="Food",
+            subcategory="Groceries",
+            limit_amount=500,
         )
         conn.execute(
             """INSERT INTO expenses (date, description, category, subcategory, amount, payer, expense_type)
@@ -343,9 +389,12 @@ def test_auto_categorize_bare_budget_name_not_a_candidate(db_path):
     Without expense description evidence, _auto_categorize should return ('', '').
     """
     with database.get_db() as conn:
-        conn.execute(
-            """INSERT INTO budgets (category, subcategory, limit_amount, effective_date)
-               VALUES ('Food', 'Groceries', 500, '2020-01-01')"""
+        budget_store.insert_line(
+            conn,
+            date.today().strftime("%Y-%m"),
+            category="Food",
+            subcategory="Groceries",
+            limit_amount=500,
         )
         # No expenses — only the budget name exists
         conn.commit()
@@ -398,14 +447,47 @@ def test_list_categories(client, db_path):
     assert "Food" in names
 
 
-# ── Goal-created budget lines carry surrogate ids ────────────────────────────
+# ── Rename reaches budget lines ──────────────────────────────────────────────
 
 
-def test_goal_create_budget_line_carries_category_ids(client, db_path):
+def test_rename_reaches_budget_lines(client, db_path):
     """
-    POST /api/goals with a category mints the `categories` row and stamps
-    `category_id` / `subcategory_id` on the synthetic budget line, so a
-    rename-by-id reaches it.
+    PATCH /api/categories/{id} renames the category once; budget lines read their
+    names from `categories`, so every month of the line follows, `line_key` intact.
+    """
+    with database.get_db() as conn:
+        budget_store.insert_line(
+            conn,
+            "2025-03",
+            category="Food",
+            subcategory="Groceries",
+            limit_amount=500,
+        )
+        conn.commit()
+        [before] = budget_store.lines_for_month(conn, "2025-03")
+
+    resp = client.patch(
+        f"/api/categories/{before['category_id']}", json={"name": "Eating Out"}
+    )
+    assert resp.status_code == 200
+
+    with database.get_db() as conn:
+        [early] = budget_store.lines_for_month(conn, "2025-03")
+        [late] = budget_store.lines_for_month(conn, "2027-01")
+
+    for after in (early, late):
+        assert after["category"] == "Eating Out"
+        assert after["line_key"] == before["line_key"]
+
+
+# ── Goals no longer mint synthetic budget rows ───────────────────────────────
+
+
+def test_goal_create_records_link_without_budget_row(client, db_path):
+    """
+    POST /api/goals with a category records the funding link but writes no
+    budget rows: budgets are owned by the planner, not by goals
+    (2026-10-03 plan §9 retires the synthetic-budget-row behavior).
     """
     resp = client.post(
         "/api/goals",
@@ -421,30 +503,17 @@ def test_goal_create_budget_line_carries_category_ids(client, db_path):
     assert resp.status_code == 201
 
     with database.get_db() as conn:
-        b = conn.execute(
-            "SELECT category, category_id, subcategory_id FROM budgets"
+        link = conn.execute(
+            "SELECT goal_name, category, subcategory FROM goal_budget_links"
         ).fetchone()
-        cat_row = conn.execute(
-            "SELECT id FROM categories WHERE name = 'Travel' AND kind = 'category'"
-        ).fetchone()
-
-    assert b["category"] == "Travel"
-    assert cat_row is not None, "goal creation did not mint the 'Travel' category row"
-    assert b["category_id"] == cat_row["id"]
-    assert b["subcategory_id"] is not None
-
-    # Renaming the category by id must reach the goal-created budget line
-    rename = client.patch(
-        f"/api/categories/{b['category_id']}", json={"name": "Travel & Leisure"}
-    )
-    assert rename.status_code == 200
-    with database.get_db() as conn:
-        after = conn.execute("SELECT category FROM budgets").fetchone()
-    assert after["category"] == "Travel & Leisure"
+        assert link["goal_name"] == "Vacation"
+        assert link["category"] == "Travel"
+        assert link["subcategory"] == "Flights"
+        assert _budget_rows(conn)["budget_lines"] == []
 
 
-def test_goal_link_budget_line_carries_category_ids(client, db_path):
-    """POST /api/goals/links stamps surrogate ids on its budget line."""
+def test_goal_link_creates_no_budget_row(client, db_path):
+    """POST /api/goals/links records a link and no budget rows."""
     client.post(
         "/api/goals",
         json={
@@ -466,67 +535,14 @@ def test_goal_link_budget_line_carries_category_ids(client, db_path):
     assert resp.status_code == 201
 
     with database.get_db() as conn:
-        b = conn.execute(
-            "SELECT category_id, subcategory_id FROM budgets WHERE category = 'Auto'"
-        ).fetchone()
-    assert b is not None
-    assert b["category_id"] is not None
-    assert b["subcategory_id"] is not None
+        assert _budget_rows(conn)["budget_lines"] == []
 
 
-# ── Draft-commit budget lines carry surrogate ids ────────────────────────────
-
-
-def test_draft_commit_budget_lines_carry_category_ids(client, db_path):
-    """Committing a draft month stamps surrogate ids on the budgets it creates."""
-    with database.get_db() as conn:
-        conn.execute(
-            """INSERT INTO budgets (category, subcategory, limit_amount, frequency, effective_date)
-               VALUES ('Food', 'Groceries', 500, 'Monthly', '2020-01-01')"""
-        )
-        conn.commit()
-
-    # One draft that changes an existing line, one that adds a brand-new line.
-    client.post(
-        "/api/budget-drafts",
-        json={
-            "target_month": "2026-07-01",
-            "category": "Food",
-            "subcategory": "Groceries",
-            "limit_amount": 650.0,
-            "frequency": "Monthly",
-        },
-    )
-    client.post(
-        "/api/budget-drafts",
-        json={
-            "target_month": "2026-07-01",
-            "category": "Pets",
-            "subcategory": "Vet",
-            "limit_amount": 100.0,
-            "frequency": "Monthly",
-        },
-    )
-
-    resp = client.post("/api/budget-drafts/2026-07-01/commit")
-    assert resp.status_code == 200
-
-    with database.get_db() as conn:
-        new_rows = conn.execute(
-            """SELECT category, category_id, subcategory_id FROM budgets
-               WHERE effective_date = '2026-07-01'"""
-        ).fetchall()
-
-    assert {r["category"] for r in new_rows} == {"Food", "Pets"}
-    assert all(r["category_id"] is not None for r in new_rows)
-    assert all(r["subcategory_id"] is not None for r in new_rows)
-
-
-# ── Legacy CSV importer stamps surrogate ids ─────────────────────────────────
+# ── Legacy CSV importer writes versioned budget lines ────────────────────────
 
 
 def test_migrate_script_stamps_category_ids(tmp_path, monkeypatch):
-    """migrate.py must resolve surrogate keys for the rows it imports."""
+    """migrate.py resolves surrogate keys and turns CSV budgets into versioned lines."""
     import migrate
 
     data_dir = tmp_path / "data"
@@ -552,9 +568,17 @@ def test_migrate_script_stamps_category_ids(tmp_path, monkeypatch):
     conn.row_factory = sqlite3.Row
     try:
         e = conn.execute("SELECT category_id, subcategory_id FROM expenses").fetchone()
-        b = conn.execute("SELECT category_id, subcategory_id FROM budgets").fetchone()
+        line = conn.execute(
+            "SELECT line_key, category_id, subcategory_id FROM budget_lines"
+        ).fetchone()
+        versions = conn.execute(
+            "SELECT effective_month, amount FROM budget_amounts WHERE line_key = ?",
+            (line["line_key"],),
+        ).fetchall()
     finally:
         conn.close()
 
     assert e["category_id"] is not None and e["subcategory_id"] is not None
-    assert b["category_id"] is not None and b["subcategory_id"] is not None
+    assert line["category_id"] is not None and line["subcategory_id"] is not None
+    # One open-ended CSV window becomes one line with one version, in force from then on.
+    assert [tuple(v) for v in versions] == [("2025-01", 500.0)]

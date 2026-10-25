@@ -22,6 +22,7 @@ import pandas as pd
 from fastapi import APIRouter, HTTPException, UploadFile, File
 from pydantic import BaseModel
 
+import budget_store
 from database import get_db
 from routers.categories import resolve_category_ids
 
@@ -254,19 +255,16 @@ def _auto_categorize(description: str, conn) -> tuple[str, str]:
     try:
         from thefuzz import process  # type: ignore
 
-        today_str = date.today().isoformat()
-        active_budgets = conn.execute(
-            """SELECT DISTINCT category, subcategory FROM budgets
-               WHERE limit_amount > 0
-                 AND effective_date <= ?
-                 AND (conclusion_date IS NULL OR conclusion_date >= ?)""",
-            (today_str, today_str),
-        ).fetchall()
+        month = date.today().strftime("%Y-%m")
+        lines, _inherited = budget_store.resolve_view(conn, month)
+        active_pairs = {
+            (line["category"], line["subcategory"])
+            for line in lines
+            if line["limit_amount"] > 0
+        }
 
-        if not active_budgets:
+        if not active_pairs:
             return "", ""
-
-        active_pairs = {(b["category"], b["subcategory"]) for b in active_budgets}
 
         rows = conn.execute(
             "SELECT DISTINCT description, category, subcategory FROM expenses WHERE category != ''"

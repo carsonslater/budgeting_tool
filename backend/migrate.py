@@ -101,6 +101,14 @@ def migrate_expenses(conn: sqlite3.Connection) -> int:
 
 
 def migrate_budgets(conn: sqlite3.Connection) -> int:
+    """
+    Load the legacy CSV budget windows into the effective-dated `budgets` table.
+
+    Only the legacy rows are written here.  `main()` resolves their category ids and then
+    calls the v3 migration's expansion, so a CSV window becomes versioned budget lines by
+    exactly the same code (and the same "latest effective date wins" rule) as a database
+    upgraded in place.
+    """
     if _count(conn, "budgets") > 0:
         print("  budgets:          SKIPPED (table already has data)")
         return 0
@@ -135,26 +143,29 @@ def migrate_budgets(conn: sqlite3.Connection) -> int:
     else:
         df["conclusion_date"] = None
 
-    rows = df[
-        [
-            "category",
-            "subcategory",
-            "limit_amount",
-            "frequency",
-            "effective_date",
-            "conclusion_date",
+    rows = (
+        df[
+            [
+                "category",
+                "subcategory",
+                "limit_amount",
+                "frequency",
+                "effective_date",
+                "conclusion_date",
+            ]
         ]
-    ].to_dict("records")
-
+        .dropna(subset=["effective_date"])
+        .to_dict("records")
+    )
     conn.executemany(
-        """INSERT INTO budgets (category, subcategory, limit_amount, frequency,
-                                 effective_date, conclusion_date)
+        """INSERT INTO budgets
+             (category, subcategory, limit_amount, frequency, effective_date, conclusion_date)
            VALUES (:category, :subcategory, :limit_amount, :frequency,
                    :effective_date, :conclusion_date)""",
         rows,
     )
     conn.commit()
-    print(f"  budgets:          {len(rows)} rows inserted")
+    print(f"  budgets:          {len(rows)} legacy rows inserted")
     return len(rows)
 
 
@@ -282,6 +293,7 @@ def main() -> None:
     from database import init_db  # noqa: relative import works when run as module
     from migrations import run_migrations
     from migrations.m0002_category_identity import backfill_ids, backfill_names
+    from migrations.m0003_per_month_budgets import migrate as expand_budgets
 
     init_db()
 
@@ -302,6 +314,10 @@ def main() -> None:
     # rename-safe even if this script is the last thing to touch the DB.
     backfill_names(conn)
     backfill_ids(conn)
+    conn.commit()
+    # Now that the legacy budget rows carry ids, turn them into versioned lines.  The
+    # expansion is a no-op when lines already exist.
+    expand_budgets(conn)
     conn.commit()
     conn.close()
     print(f"────────────────────────────────────────────────────────")

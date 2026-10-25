@@ -12,10 +12,12 @@ Routes:
 
 from __future__ import annotations
 
+from datetime import date
 from typing import Optional
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
+import budget_store
 from database import get_db
 from routers.categories import resolve_category_ids
 
@@ -77,25 +79,32 @@ def list_payers() -> list[str]:
 
 @router.get("/subcategories")
 def list_subcategories(category: Optional[str] = Query(None)) -> list[str]:
-    """Retrieve distinct subcategories from both expenses and budgets."""
+    """
+    Distinct subcategories from expenses and from recent budget lines.
+
+    Budget lines are read over the trailing 12 months (plan §11.3) — enough for a
+    useful suggestion list without walking the whole history.
+    """
     sql_exp = "SELECT DISTINCT subcategory FROM expenses WHERE subcategory != ''"
-    sql_bud = "SELECT DISTINCT subcategory FROM budgets WHERE subcategory != ''"
-    params_exp = []
-    params_bud = []
+    params_exp: list = []
     if category:
         sql_exp += " AND category = ?"
-        sql_bud += " AND category = ?"
         params_exp.append(category)
-        params_bud.append(category)
+
+    today = date.today()
+    start_month = budget_store.shift_month(f"{today:%Y-%m}", -11)
 
     with get_db() as conn:
         rows_exp = conn.execute(sql_exp, params_exp).fetchall()
-        rows_bud = conn.execute(sql_bud, params_bud).fetchall()
+        budget_rows = budget_store.lines_in_range(conn, start_month, None)
 
-    subs = set(
-        [r["subcategory"] for r in rows_exp] + [r["subcategory"] for r in rows_bud]
+    subs = {r["subcategory"] for r in rows_exp if r["subcategory"]}
+    subs.update(
+        r["subcategory"]
+        for r in budget_rows
+        if r["subcategory"] and (not category or r["category"] == category)
     )
-    return sorted(list(subs))
+    return sorted(subs)
 
 
 @router.get("")

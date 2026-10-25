@@ -15,7 +15,11 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from database import get_db, init_db
+from datetime import datetime
+
+import database
 from migrations import run_migrations
+from migrations.runner import LATEST_VERSION, get_user_version, pending_migrations
 from routers import (
     expenses,
     budgets,
@@ -23,8 +27,8 @@ from routers import (
     goals,
     reporting,
     import_csv,
-    budget_drafts,
     categories,
+    month_plans,
 )
 
 
@@ -43,6 +47,12 @@ async def lifespan(app: FastAPI):
     init_db()
     conn = get_db()
     try:
+        # A migration rewrites real data, so snapshot first (backup API, not a file copy).
+        if pending_migrations(conn) and database.has_data(conn):
+            stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            name = f"pre_migration_v{get_user_version(conn)}_to_v{LATEST_VERSION}_{stamp}.db"
+            dest = database.snapshot_database(database.backups_dir() / name)
+            print(f"[migrations] snapshot written: {dest}")
         applied = run_migrations(conn)
         if applied:
             print(f"[migrations] applied: {applied}")
@@ -79,8 +89,8 @@ app.add_middleware(
 # ── Routers ───────────────────────────────────────────────────────────────────
 app.include_router(expenses.router)
 app.include_router(budgets.router)
-app.include_router(budget_drafts.router)
 app.include_router(categories.router)
+app.include_router(month_plans.router)
 app.include_router(income.router)
 app.include_router(goals.router)
 app.include_router(reporting.router)
@@ -97,22 +107,17 @@ def health() -> dict:
 
 # ── System / Settings ──────────────────────────────────────────────────────────
 
-import shutil
 import platform
 import subprocess
-from datetime import datetime
 from database import _DB_PATH
 
 
 @app.post("/api/backup", tags=["system"])
 def backup_data() -> dict:
-    backups_dir = _DB_PATH.parent.parent / "backups"
-    backups_dir.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    dest = backups_dir / f"budget_{stamp}.db"
     if not _DB_PATH.exists():
         return {"error": "No DB found"}
-    shutil.copy2(_DB_PATH, dest)
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    database.snapshot_database(database.backups_dir() / f"budget_{stamp}.db")
     return {"message": "Backup created", "timestamp": stamp}
 
 

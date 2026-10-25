@@ -8,6 +8,7 @@ from typing import Callable, Sequence
 
 from .m0001_goal_tracking import migrate as _m0001
 from .m0002_category_identity import migrate as _m0002
+from .m0003_per_month_budgets import migrate as _m0003
 
 
 @dataclass(frozen=True)
@@ -23,6 +24,9 @@ class Migration:
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(1, "goal tracking: expenses.goal_id, sweep_rules, closed_months", _m0001),
     Migration(2, "category identity: categories table, *_id columns, indexes", _m0002),
+    Migration(
+        3, "versioned budgets: budget_lines + budget_amounts + month_plans", _m0003
+    ),
 )
 
 LATEST_VERSION: int = max(m.version for m in MIGRATIONS)

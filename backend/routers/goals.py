@@ -1,6 +1,11 @@
 """
 routers/goals.py — Goals CRUD + goal-budget link management.
 
+`goal_budget_links` is envelope metadata only: it records which category a goal
+is funded from and over what window. It no longer mints a synthetic `budgets`
+row — budgets now live in versioned lines and are owned by the planner, not by
+goals (2026-10-03 plan §9, which retires the synthetic-budget-row behavior).
+
 Routes:
     GET    /api/goals              list all goals
     POST   /api/goals              create
@@ -20,7 +25,6 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from database import get_db
-from routers.categories import resolve_category_ids
 
 router = APIRouter(prefix="/api/goals", tags=["goals"])
 
@@ -83,21 +87,10 @@ def create_goal_link(body: GoalLinkCreate) -> dict:
         ).fetchone()
 
         conclusion_date = body.end_date
-        limit_amount = 0.0
 
         if goal:
             try:
-                start_dt = datetime.strptime(goal["created_date"], "%Y-%m-%d")
                 end_dt = datetime.strptime(goal["target_month"], "%Y-%m-%d")
-
-                months = (
-                    (end_dt.year - start_dt.year) * 12
-                    + (end_dt.month - start_dt.month)
-                    + 1
-                )
-                months = max(1, months)
-                limit_amount = goal["target_amount"] / months
-
                 last_day = calendar.monthrange(end_dt.year, end_dt.month)[1]
                 conclusion_date = f"{end_dt.year:04d}-{end_dt.month:02d}-{last_day:02d}"
             except Exception:
@@ -117,24 +110,6 @@ def create_goal_link(body: GoalLinkCreate) -> dict:
             ),
         )
 
-        # Insert budget line (with surrogate keys so rename-by-id reaches it)
-        cat_id, sub_id = resolve_category_ids(conn, body.category, body.subcategory)
-        conn.execute(
-            """INSERT INTO budgets
-                 (category, subcategory, limit_amount, frequency, effective_date, conclusion_date,
-                  category_id, subcategory_id)
-               VALUES (?, ?, ?, 'Monthly', ?, ?, ?, ?)""",
-            (
-                body.category,
-                body.subcategory,
-                limit_amount,
-                body.start_date,
-                conclusion_date,
-                cat_id,
-                sub_id,
-            ),
-        )
-
         conn.commit()
         row = conn.execute(
             "SELECT * FROM goal_budget_links WHERE id = ?", (cur.lastrowid,)
@@ -146,32 +121,10 @@ def create_goal_link(body: GoalLinkCreate) -> dict:
 def delete_goal_link(link_id: int) -> None:
     with get_db() as conn:
         link = conn.execute(
-            "SELECT category, subcategory, start_date, end_date FROM goal_budget_links WHERE id = ?",
-            (link_id,),
+            "SELECT id FROM goal_budget_links WHERE id = ?", (link_id,)
         ).fetchone()
         if not link:
             raise HTTPException(status_code=404, detail="Link not found")
-
-        # Delete matching budget line
-        if link["end_date"]:
-            conn.execute(
-                """DELETE FROM budgets
-                   WHERE category = ? AND subcategory = ?
-                     AND effective_date = ? AND conclusion_date = ?""",
-                (
-                    link["category"],
-                    link["subcategory"],
-                    link["start_date"],
-                    link["end_date"],
-                ),
-            )
-        else:
-            conn.execute(
-                """DELETE FROM budgets
-                   WHERE category = ? AND subcategory = ?
-                     AND effective_date = ? AND conclusion_date IS NULL""",
-                (link["category"], link["subcategory"], link["start_date"]),
-            )
 
         result = conn.execute("DELETE FROM goal_budget_links WHERE id = ?", (link_id,))
         conn.commit()
@@ -206,25 +159,16 @@ def create_goal(body: GoalCreate) -> dict:
             ),
         )
 
-        # If category is provided, also create the link and budget line
+        # If a category is provided, also record the goal's funding link.
         if body.category:
             try:
                 start_dt = datetime.strptime(body.created_date, "%Y-%m-%d")
                 end_dt = datetime.strptime(body.target_month, "%Y-%m-%d")
 
-                months = (
-                    (end_dt.year - start_dt.year) * 12
-                    + (end_dt.month - start_dt.month)
-                    + 1
-                )
-                months = max(1, months)
-                limit_amount = body.target_amount / months
-
                 last_day = calendar.monthrange(end_dt.year, end_dt.month)[1]
                 conclusion_date = f"{end_dt.year:04d}-{end_dt.month:02d}-{last_day:02d}"
                 start_date_normalized = f"{start_dt.year:04d}-{start_dt.month:02d}-01"
             except Exception:
-                limit_amount = 0.0
                 conclusion_date = None
                 start_date_normalized = body.created_date
 
@@ -242,24 +186,6 @@ def create_goal(body: GoalCreate) -> dict:
                 ),
             )
 
-            # Create budget line (with surrogate keys so rename-by-id reaches it)
-            cat_id, sub_id = resolve_category_ids(conn, body.category, body.subcategory)
-            conn.execute(
-                """INSERT INTO budgets
-                     (category, subcategory, limit_amount, frequency, effective_date, conclusion_date,
-                      category_id, subcategory_id)
-                   VALUES (?, ?, ?, 'Monthly', ?, ?, ?, ?)""",
-                (
-                    body.category,
-                    body.subcategory,
-                    limit_amount,
-                    start_date_normalized,
-                    conclusion_date,
-                    cat_id,
-                    sub_id,
-                ),
-            )
-
         conn.commit()
         row = conn.execute(
             "SELECT * FROM goals WHERE id = ?", (cur.lastrowid,)
@@ -272,16 +198,14 @@ def update_goal(goal_id: int, body: GoalUpdate) -> dict:
     with get_db() as conn:
         # Get old goal info
         old_goal = conn.execute(
-            "SELECT name, target_amount, target_month, created_date FROM goals WHERE id = ?",
+            "SELECT name, target_month FROM goals WHERE id = ?",
             (goal_id,),
         ).fetchone()
         if not old_goal:
             raise HTTPException(status_code=404, detail="Goal not found")
 
         old_name = old_goal["name"]
-        old_target = old_goal["target_amount"]
         old_target_month = old_goal["target_month"]
-        old_created = old_goal["created_date"]
 
         # Apply updates to goal
         updates = {k: v for k, v in body.model_dump().items() if v is not None}
@@ -294,7 +218,6 @@ def update_goal(goal_id: int, body: GoalUpdate) -> dict:
         conn.execute(f"UPDATE goals SET {set_clause} WHERE id = ?", values)
 
         new_name = updates.get("name", old_name)
-        new_target = updates.get("target_amount", old_target)
         new_target_month = updates.get("target_month", old_target_month)
 
         # If name changed, update the links
@@ -304,82 +227,23 @@ def update_goal(goal_id: int, body: GoalUpdate) -> dict:
                 (new_name, old_name),
             )
 
-        # If target amount or target month or name changed, let's update associated budgets
-        if (
-            (new_target != old_target)
-            or (new_target_month != old_target_month)
-            or (new_name != old_name)
-        ):
+        # A goal owns no budget rows, so only the links' end_date tracks the
+        # target month. Every link for the goal shares the same end_date.
+        if new_target_month != old_target_month:
             try:
-                start_dt = datetime.strptime(old_created, "%Y-%m-%d")
                 end_dt = datetime.strptime(new_target_month, "%Y-%m-%d")
-
-                months = (
-                    (end_dt.year - start_dt.year) * 12
-                    + (end_dt.month - start_dt.month)
-                    + 1
-                )
-                months = max(1, months)
-                new_limit = new_target / months
-
                 last_day = calendar.monthrange(end_dt.year, end_dt.month)[1]
                 new_conclusion_date = (
                     f"{end_dt.year:04d}-{end_dt.month:02d}-{last_day:02d}"
                 )
             except Exception:
-                new_limit = None
+                new_conclusion_date = None
 
-            if new_limit is not None:
-                # Find all links for this goal
-                links = conn.execute(
-                    "SELECT category, subcategory, start_date, end_date FROM goal_budget_links WHERE goal_name = ?",
-                    (new_name,),
-                ).fetchall()
-
-                for l in links:
-                    if l["end_date"]:
-                        conn.execute(
-                            """UPDATE budgets
-                               SET limit_amount = ?, conclusion_date = ?
-                               WHERE category = ? AND subcategory = ?
-                                 AND effective_date = ? AND conclusion_date = ?""",
-                            (
-                                new_limit,
-                                new_conclusion_date,
-                                l["category"],
-                                l["subcategory"],
-                                l["start_date"],
-                                l["end_date"],
-                            ),
-                        )
-                    else:
-                        conn.execute(
-                            """UPDATE budgets
-                               SET limit_amount = ?, conclusion_date = ?
-                               WHERE category = ? AND subcategory = ?
-                                 AND effective_date = ? AND conclusion_date IS NULL""",
-                            (
-                                new_limit,
-                                new_conclusion_date,
-                                l["category"],
-                                l["subcategory"],
-                                l["start_date"],
-                            ),
-                        )
-
-                    # Update end_date in the link table as well
-                    conn.execute(
-                        """UPDATE goal_budget_links
-                           SET end_date = ?
-                           WHERE goal_name = ? AND category = ? AND subcategory = ? AND start_date = ?""",
-                        (
-                            new_conclusion_date,
-                            new_name,
-                            l["category"],
-                            l["subcategory"],
-                            l["start_date"],
-                        ),
-                    )
+            if new_conclusion_date is not None:
+                conn.execute(
+                    "UPDATE goal_budget_links SET end_date = ? WHERE goal_name = ?",
+                    (new_conclusion_date, new_name),
+                )
 
         conn.commit()
         row = conn.execute("SELECT * FROM goals WHERE id = ?", (goal_id,)).fetchone()
@@ -399,28 +263,6 @@ def delete_goal(goal_id: int) -> None:
             raise HTTPException(status_code=404, detail="Goal not found")
 
         goal_name = goal["name"]
-
-        # Get links
-        links = conn.execute(
-            "SELECT category, subcategory, start_date, end_date FROM goal_budget_links WHERE goal_name = ?",
-            (goal_name,),
-        ).fetchall()
-
-        for l in links:
-            if l["end_date"]:
-                conn.execute(
-                    """DELETE FROM budgets
-                       WHERE category = ? AND subcategory = ?
-                         AND effective_date = ? AND conclusion_date = ?""",
-                    (l["category"], l["subcategory"], l["start_date"], l["end_date"]),
-                )
-            else:
-                conn.execute(
-                    """DELETE FROM budgets
-                       WHERE category = ? AND subcategory = ?
-                         AND effective_date = ? AND conclusion_date IS NULL""",
-                    (l["category"], l["subcategory"], l["start_date"]),
-                )
 
         # Delete links
         conn.execute("DELETE FROM goal_budget_links WHERE goal_name = ?", (goal_name,))

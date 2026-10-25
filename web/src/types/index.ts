@@ -27,33 +27,56 @@ export type ExpenseUpdate = Partial<Omit<Expense, 'id'>>;
 
 // ── Budgets ───────────────────────────────────────────────────────────────────
 
+export type BudgetFrequency = 'Monthly' | 'Quarterly' | 'Bi-annually' | 'Annually';
+
+/**
+ * How far a budget write reaches (see the backend's `budget_store`):
+ * `forward` = from the month until the next explicit change (the server default),
+ * `month` = that month only, `through` = that month through `through` (inclusive).
+ */
+export type ApplyMode = 'forward' | 'month' | 'through';
+
+export interface ApplyScope {
+  apply?: ApplyMode;
+  through?: string;          // YYYY-MM, required when apply === 'through'
+}
+
+/**
+ * One budget line as it stands in a month. Lines are identified across months by
+ * `line_key`, the UUID assigned once at creation. `inherited` is true until the
+ * month is confirmed; `effective_since` is the month this value took effect.
+ */
 export interface Budget {
-  id: number;
+  line_key: string;
   category: string;
   subcategory: string;
   limit_amount: number;
-  frequency: 'Monthly' | 'Quarterly' | 'Bi-annually' | 'Annually';
-  effective_date: string;    // ISO YYYY-MM-DD
-  conclusion_date: string | null;
+  frequency: BudgetFrequency;
+  category_id?: number | null;
+  subcategory_id?: number | null;
+  month: string;             // YYYY-MM the line was read for
+  inherited: boolean;
+  effective_since?: string | null;   // YYYY-MM this value took effect
 }
 
-export type BudgetCreate = Omit<Budget, 'id'>;
-export type BudgetUpdate = Partial<Omit<Budget, 'id'>>;
-
-export interface BudgetDraft {
-  id: number;
-  target_month: string;
+export interface BudgetCreate extends ApplyScope {
+  month: string;             // YYYY-MM
   category: string;
-  subcategory: string;
+  subcategory?: string;
   limit_amount: number;
-  frequency: 'Monthly' | 'Quarterly' | 'Bi-annually' | 'Annually';
+  frequency: BudgetFrequency;
 }
 
-export type BudgetDraftCreate = Omit<BudgetDraft, 'id'>;
-export type BudgetDraftUpdate = Partial<Omit<BudgetDraft, 'id' | 'target_month'>>;
+export interface BudgetUpdate {
+  category?: string;
+  subcategory?: string;
+  limit_amount?: number;
+  frequency?: BudgetFrequency;
+}
 
 export interface SuggestedBudget {
-  budget_id: number;
+  line_key: string;
+  month: string;
   category: string;
   subcategory: string;
   current_limit: number;
@@ -103,6 +126,7 @@ export type GoalLinkCreate = Omit<GoalLink, 'id'>;
 /** One budget line in GET /api/reporting/summary (either partition). */
 export interface ReportSummaryRow {
   budget_id: number;
+  line_key: string;
   category: string;
   subcategory: string;
   budget: number;
@@ -166,9 +190,10 @@ export interface ImportResult {
 
 export interface ActiveCategory {
   budget_id: number;
+  line_key: string;
   category: string;
   subcategory: string;
-  frequency: 'Monthly' | 'Quarterly' | 'Bi-annually' | 'Annually';
+  frequency: BudgetFrequency;
   category_id?: number | null;
   subcategory_id?: number | null;
 }
@@ -183,4 +208,3 @@ export interface CategoryRow {
 export interface CategoryUpdate {
   name: string;
 }
-
