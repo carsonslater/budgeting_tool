@@ -23,7 +23,6 @@ from migrations.runner import LATEST_VERSION, get_user_version, pending_migratio
 from routers import (
     expenses,
     budgets,
-    income,
     goals,
     reporting,
     import_csv,
@@ -91,7 +90,6 @@ app.include_router(expenses.router)
 app.include_router(budgets.router)
 app.include_router(categories.router)
 app.include_router(month_plans.router)
-app.include_router(income.router)
 app.include_router(goals.router)
 app.include_router(reporting.router)
 app.include_router(import_csv.router)

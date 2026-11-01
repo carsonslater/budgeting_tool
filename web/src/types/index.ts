@@ -87,12 +87,6 @@ export interface SuggestedBudget {
   recent_month_spent: number;
 }
 
-// ── Income ────────────────────────────────────────────────────────────────────
-
-export interface IncomeTotal {
-  total: number;
-}
-
 // ── Goals ─────────────────────────────────────────────────────────────────────
 
 export interface Goal {
@@ -208,3 +202,22 @@ export interface CategoryRow {
 export interface CategoryUpdate {
   name: string;
 }
+
+// ── Month plans ───────────────────────────────────────────────────────────────
+
+/** One month's plan state from GET /api/month-plans. `inherited` means not yet confirmed. */
+export interface MonthPlanStatus {
+  month: string;             // YYYY-MM
+  status: 'inherited' | 'confirmed';
+  confirmed_at: string | null;
+}
+
+/**
+ * GET /api/month-plans/{month}. `expected_income` is the value in force for the month
+ * (null = never set); `income_set_in` is the month that value was entered in.
+ */
+export interface MonthPlan extends MonthPlanStatus {
+  expected_income: number | null;
+  income_set_in: string | null;
+}
+

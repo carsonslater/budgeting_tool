@@ -8,7 +8,7 @@ import { Badge } from '../components/ui/Badge';
 import { useCategories, useSubcategories } from '../hooks/useExpenses';
 import { useGoals, useGoalLinks, useGoalActions } from '../hooks/useGoals';
 import { useExpenses } from '../hooks/useExpenses';
-import { useIncome } from '../hooks/useIncome';
+import { useMonthPlan } from '../hooks/useMonthPlans';
 import styles from './Goals.module.css';
 
 function formatCurrency(amount: number) {
@@ -22,7 +22,7 @@ export const Goals: React.FC = () => {
   const { data: goals, isLoading: loadingGoals } = useGoals();
   const { data: goalLinks } = useGoalLinks();
   const { data: allExpenses } = useExpenses();
-  const { data: incomeData } = useIncome();
+  const { data: plan } = useMonthPlan(format(new Date(), 'yyyy-MM'));
   const { data: categories } = useCategories();
   const { create, update, remove, createLink, removeLink } = useGoalActions();
 
@@ -150,7 +150,7 @@ export const Goals: React.FC = () => {
     };
   }, [goals, goalLinks, allExpenses]);
 
-  const totalIncome = typeof incomeData === 'number' ? incomeData : 0;
+  const totalIncome = plan?.expected_income ?? 0;
   const pctIncomeAllocated = totalIncome ? Math.round((monthlyGoalSpending / totalIncome) * 100) : 0;
 
   return (

@@ -3,7 +3,7 @@ import { startOfMonth, endOfMonth, subMonths, format, parseISO } from 'date-fns'
 import { Card } from '../components/ui/Card';
 import { Badge } from '../components/ui/Badge';
 import { useExpenses } from '../hooks/useExpenses';
-import { useIncome } from '../hooks/useIncome';
+import { useMonthPlan } from '../hooks/useMonthPlans';
 import { useGoals, useGoalLinks } from '../hooks/useGoals';
 import { useReportSummary } from '../hooks/useReporting';
 import { useCountUp } from '../hooks/useCountUp';
@@ -18,13 +18,14 @@ function formatCurrency(amount: number) {
 
 export const Dashboard: React.FC = () => {
   const { data: allExpenses, isLoading: loadingExpenses } = useExpenses();
-  const { data: incomeData, isLoading: loadingIncome } = useIncome();
+  // Income is per month: the figure in force for the current month.
+  const currentMonth = format(new Date(), 'yyyy-MM');
+  const { data: plan, isLoading: loadingIncome } = useMonthPlan(currentMonth);
   const { data: goals, isLoading: loadingGoals } = useGoals();
   const { data: goalLinks, isLoading: loadingLinks } = useGoalLinks();
 
   // Budget health comes from the server partition so the Dashboard and the
   // Reporting page cannot disagree about a line's status.
-  const currentMonth = format(new Date(), 'yyyy-MM');
   const { data: summary, isLoading: loadingSummary } = useReportSummary(currentMonth);
 
   const isLoading = loadingExpenses || loadingIncome || loadingGoals || loadingLinks || loadingSummary;
@@ -58,7 +59,7 @@ export const Dashboard: React.FC = () => {
     const spentThis = expensesThisMonth.reduce((sum, e) => sum + e.amount, 0);
     const spentLast = expensesLastMonth.reduce((sum, e) => sum + e.amount, 0);
 
-    const income = typeof incomeData === 'number' ? incomeData : 0;
+    const income = plan?.expected_income ?? 0;
     const net = income - spentThis;
     const pct = spentLast === 0 ? 0 : ((spentThis - spentLast) / spentLast) * 100;
     const arcPct = income === 0 ? 0 : Math.min(spentThis / income, 1);
@@ -122,7 +123,7 @@ export const Dashboard: React.FC = () => {
       recentExpenses: recent,
       goalsProgress: gProgress
     };
-  }, [allExpenses, incomeData, summary, goals, goalLinks, isLoading]);
+  }, [allExpenses, plan, summary, goals, goalLinks, isLoading]);
 
   const animatedSpent = useCountUp(totalSpentThisMonth || 0, 1000);
   const animatedIncome = useCountUp(totalIncome || 0, 1000);

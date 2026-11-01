@@ -9,7 +9,7 @@ Semantics under test (plan 2026-10-25 §4):
 * a tombstone (amount IS NULL) ends a line; reads never write
 * an edit takes an apply scope: forward (until changed), month, or through <month>
 * one line per (category, subcategory); an ended line is revived, not duplicated
-* only the latest frequency is kept; changing it rescales history
+* each version carries its own frequency; a switch must fall on whole periods
 
 A model-based test at the end drives random edits and checks them against both an
 independent oracle and a scope property that needs no oracle at all.
@@ -435,28 +435,104 @@ class TestFrequency:
         with pytest.raises(ValueError):
             store.update_line(conn, "2025-01", food, frequency="Weekly")
 
-    def test_changing_frequency_rescales_history_and_applies_the_new_amount(
+    def test_a_frequency_change_takes_effect_from_its_month(self, conn, food):
+        # 100/month from January; from April it is 300 per quarter.
+        store.update_line(
+            conn, "2025-04", food, frequency="Quarterly", limit_amount=300.0
+        )
+        [before] = store.lines_for_month(conn, "2025-03")
+        [after] = store.lines_for_month(conn, "2025-05")
+        assert (before["frequency"], before["limit_amount"]) == ("Monthly", 100.0)
+        assert (after["frequency"], after["limit_amount"]) == ("Quarterly", 300.0)
+
+    def test_a_frequency_change_alone_keeps_the_amount_as_entered(self, conn, food):
+        store.update_line(conn, "2025-04", food, frequency="Quarterly")
+        [line] = store.lines_for_month(conn, "2025-06")
+        assert line["frequency"] == "Quarterly"
+        assert line["limit_amount"] == 100.0
+
+    def test_a_month_scoped_amount_edit_keeps_the_frequency_in_force(self, conn, food):
+        store.update_line(
+            conn, "2025-04", food, frequency="Quarterly", limit_amount=300.0
+        )
+        store.update_line(conn, "2025-05", food, limit_amount=350.0, apply="month")
+        [may] = store.lines_for_month(conn, "2025-05")
+        [jun] = store.lines_for_month(conn, "2025-06")
+        assert (may["frequency"], may["limit_amount"]) == ("Quarterly", 350.0)
+        assert (jun["frequency"], jun["limit_amount"]) == ("Quarterly", 300.0)
+
+    def test_a_change_must_take_effect_at_the_start_of_a_whole_period(self, conn, food):
+        conn.commit()
+        before = snapshot(conn)
+        with pytest.raises(ValueError, match="2025-04"):
+            store.update_line(conn, "2025-03", food, frequency="Quarterly")
+        conn.rollback()
+        assert snapshot(conn) == before
+
+    def test_a_quarterly_line_cannot_switch_back_mid_quarter(self, conn, food):
+        store.update_line(conn, "2025-04", food, frequency="Quarterly")
+        conn.commit()
+        with pytest.raises(ValueError):
+            store.update_line(conn, "2025-05", food, frequency="Monthly")
+        conn.rollback()
+        store.update_line(conn, "2025-07", food, frequency="Monthly")
+        conn.commit()
+        assert store.lines_for_month(conn, "2025-06")[0]["frequency"] == "Quarterly"
+        assert store.lines_for_month(conn, "2025-07")[0]["frequency"] == "Monthly"
+
+    def test_an_annual_line_cannot_switch_mid_year(self, conn):
+        row = store.insert_line(
+            conn,
+            "2025-01",
+            category="Auto",
+            subcategory="Registration",
+            limit_amount=120.0,
+            frequency="Annually",
+        )
+        conn.commit()
+        with pytest.raises(ValueError, match="2026-01"):
+            store.update_line(conn, "2025-04", row["line_key"], frequency="Quarterly")
+
+    def test_a_bounded_frequency_change_restores_the_prior_frequency(self, conn, food):
+        store.update_line(
+            conn,
+            "2025-04",
+            food,
+            frequency="Quarterly",
+            limit_amount=300.0,
+            apply="through",
+            through="2025-06",
+        )
+        seen = {
+            m: (line["frequency"], line["limit_amount"])
+            for m in ("2025-03", "2025-04", "2025-06", "2025-07")
+            for line in store.lines_for_month(conn, m)
+        }
+        assert seen == {
+            "2025-03": ("Monthly", 100.0),
+            "2025-04": ("Quarterly", 300.0),
+            "2025-06": ("Quarterly", 300.0),
+            "2025-07": ("Monthly", 100.0),
+        }
+
+    def test_a_bounded_range_that_ends_mid_quarter_is_rejected(self, conn, food):
+        conn.commit()
+        before = snapshot(conn)
+        with pytest.raises(ValueError):
+            store.update_line(
+                conn,
+                "2025-04",
+                food,
+                frequency="Quarterly",
+                apply="through",
+                through="2025-05",
+            )
+        conn.rollback()
+        assert snapshot(conn) == before
+
+    def test_reviving_with_a_new_frequency_leaves_earlier_months_alone(
         self, conn, food
     ):
-        # 100/month from January; from June it becomes 1500/year.
-        store.update_line(
-            conn, "2025-06", food, frequency="Annually", limit_amount=1500.0
-        )
-
-        [early] = store.lines_for_month(conn, "2025-03")
-        [late] = store.lines_for_month(conn, "2025-07")
-        assert early["frequency"] == late["frequency"] == "Annually"
-        # 100/month == 1200/year, so the past keeps its monthly equivalent.
-        assert early["limit_amount"] == pytest.approx(1200.0)
-        assert late["limit_amount"] == 1500.0
-
-    def test_changing_frequency_alone_preserves_monthly_equivalents(self, conn, food):
-        store.update_line(conn, "2025-03", food, frequency="Quarterly")
-        [line] = store.lines_for_month(conn, "2025-05")
-        assert line["frequency"] == "Quarterly"
-        assert line["limit_amount"] == pytest.approx(300.0)
-
-    def test_reviving_with_a_new_frequency_rescales_the_old_versions(self, conn, food):
         store.delete_line(conn, "2025-03", food)
         store.insert_line(
             conn,
@@ -466,7 +542,7 @@ class TestFrequency:
             limit_amount=1200.0,
             frequency="Annually",
         )
-        assert amount_in(conn, food, "2025-02") == pytest.approx(1200.0)
+        assert amount_in(conn, food, "2025-02") == pytest.approx(100.0)
         assert store.line_versions(conn, food)["frequency"] == "Annually"
 
 
@@ -766,3 +842,70 @@ def test_random_edits_match_the_oracle_and_the_scope_properties(conn):
 
         # 3. Storage stays normalized.
         _assert_no_redundant_rows(conn)
+
+
+# ── Frequency history stays on whole periods (property test) ─────────────────
+
+# Written out independently of budget_math: the period length in months.
+_PERIOD_LENGTH = {"Monthly": 1, "Quarterly": 3, "Bi-annually": 6, "Annually": 12}
+
+
+def test_random_frequency_edits_keep_every_switch_on_whole_periods(conn, food):
+    """
+    Random frequency edits under random scopes.  A rejected edit writes nothing.  An
+    accepted one leaves every switch between adjacent active versions starting a whole
+    period after a finished one.  Calendar periods divide the year, so month-number
+    arithmetic mod 12 is exact.
+    """
+    conn.commit()  # so a rollback in the loop cannot erase the fixture's line
+    rng = random.Random(4817)
+    months = [f"2025-{m:02d}" for m in range(1, 13)] + [
+        f"2026-{m:02d}" for m in range(1, 7)
+    ]
+    accepted = rejected = 0
+    for step in range(300):
+        month = rng.choice(months)
+        frequency = rng.choice(list(_PERIOD_LENGTH))
+        apply = rng.choice(["forward", "month", "through"])
+        through = rng.choice([m for m in months if m >= month]) if apply == "through" else None
+        limit = rng.choice([None, 100.0, 250.0])
+        before = snapshot(conn)
+        try:
+            store.update_line(
+                conn,
+                month,
+                food,
+                frequency=frequency,
+                limit_amount=limit,
+                apply=apply,
+                through=through,
+            )
+        except ValueError:
+            conn.rollback()
+            assert snapshot(conn) == before, f"step {step}: a rejected edit wrote rows"
+            rejected += 1
+            continue
+        conn.commit()
+        accepted += 1
+
+        previous = None
+        for row in store.line_versions(conn, food)["versions"]:
+            if row["amount"] is None:
+                previous = None
+                continue
+            if previous is not None and previous["frequency"] != row["frequency"]:
+                switch = int(row["effective_month"][5:7])  # 1..12
+                old_len = _PERIOD_LENGTH[previous["frequency"]]
+                new_len = _PERIOD_LENGTH[row["frequency"]]
+                month_before = (switch - 2) % 12 + 1
+                assert (switch - 1) % new_len == 0, (
+                    f"step {step}: {row['effective_month']} does not start a "
+                    f"{row['frequency']} period"
+                )
+                assert month_before % old_len == 0, (
+                    f"step {step}: {previous['frequency']} period still running at "
+                    f"{row['effective_month']}"
+                )
+            previous = row
+
+    assert accepted > 20 and rejected > 20, (accepted, rejected)

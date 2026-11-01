@@ -62,8 +62,9 @@ export async function apiFetch<T>(
  * Convenience wrappers for common methods.
  */
 export const api = {
-  get:    <T>(path: string)              => apiFetch<T>(path, { method: 'GET' }),
-  post:   <T>(path: string, body: unknown) => apiFetch<T>(path, { method: 'POST',   body: JSON.stringify(body) }),
-  patch:  <T>(path: string, body: unknown) => apiFetch<T>(path, { method: 'PATCH',  body: JSON.stringify(body) }),
-  delete: <T = void>(path: string)       => apiFetch<T>(path, { method: 'DELETE' }),
+  get: <T>(path: string) => apiFetch<T>(path, { method: 'GET' }),
+  post: <T>(path: string, body: unknown) => apiFetch<T>(path, { method: 'POST', body: JSON.stringify(body) }),
+  patch: <T>(path: string, body: unknown) => apiFetch<T>(path, { method: 'PATCH', body: JSON.stringify(body) }),
+  put: <T>(path: string, body: unknown) => apiFetch<T>(path, { method: 'PUT', body: JSON.stringify(body) }),
+  delete: <T = void>(path: string) => apiFetch<T>(path, { method: 'DELETE' }),
 } as const;

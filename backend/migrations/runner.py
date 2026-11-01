@@ -9,6 +9,8 @@ from typing import Callable, Sequence
 from .m0001_goal_tracking import migrate as _m0001
 from .m0002_category_identity import migrate as _m0002
 from .m0003_per_month_budgets import migrate as _m0003
+from .m0004_retire_income_sources import migrate as _m0004
+from .m0005_frequency_per_version import migrate as _m0005
 
 
 @dataclass(frozen=True)
@@ -27,6 +29,10 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(
         3, "versioned budgets: budget_lines + budget_amounts + month_plans", _m0003
     ),
+    Migration(
+        4, "retire income_sources: carry the single figure into month_plans", _m0004
+    ),
+    Migration(5, "frequency per version: budget_amounts.frequency", _m0005),
 )
 
 LATEST_VERSION: int = max(m.version for m in MIGRATIONS)

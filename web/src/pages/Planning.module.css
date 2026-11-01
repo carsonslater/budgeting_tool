@@ -201,3 +201,36 @@
 .suggestionDown {
   color: var(--color-text-muted);
 }
+
+/* Month status and form notes */
+.statusRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-top: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.statusText {
+  margin: 0;
+  font-size: 0.9rem;
+  color: var(--color-text-muted);
+  max-width: 60ch;
+}
+
+.hint {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--color-text-muted);
+}
+
+.notice {
+  margin: 0;
+  padding: 0.6rem 0.75rem;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 103, 25, 0.3);
+  background: rgba(255, 103, 25, 0.08);
+  font-size: 0.85rem;
+  color: var(--color-text);
+}

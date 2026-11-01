@@ -299,15 +299,26 @@ class TestUpdate:
         assert snapshot() == before
 
     def test_changing_frequency_and_amount_together(self, client):
+        # An annual period opens in January, so the switch is made from January 2026.
+        key = create(client, "2025-03")["line_key"]
+        resp = client.patch(
+            f"/api/budgets/{key}?month=2026-01",
+            json={"frequency": "Annually", "limit_amount": 1500.0},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["frequency"] == "Annually"
+        assert amount_in(client, key, "2025-12") == pytest.approx(100.0)
+        assert amount_in(client, key, "2026-06") == 1500.0
+
+    def test_a_frequency_change_off_a_period_boundary_is_a_400(self, client):
         key = create(client, "2025-03")["line_key"]
         resp = client.patch(
             f"/api/budgets/{key}?month=2025-06",
             json={"frequency": "Annually", "limit_amount": 1500.0},
         )
-        assert resp.status_code == 200
-        assert resp.json()["frequency"] == "Annually"
-        assert amount_in(client, key, "2025-04") == pytest.approx(1200.0)
-        assert amount_in(client, key, "2025-07") == 1500.0
+        assert resp.status_code == 400
+        assert "2026-01" in resp.json()["detail"]
+        assert amount_in(client, key, "2025-06") == pytest.approx(100.0)
 
     def test_recategorizing_keeps_the_line_key(self, client):
         key = create(client, "2025-03")["line_key"]

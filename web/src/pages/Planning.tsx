@@ -1,11 +1,13 @@
-import React, { useState, useMemo, useEffect } from 'react';
-import { format, parseISO, subMonths, startOfMonth } from 'date-fns';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
+import { format, isValid, parseISO } from 'date-fns';
 import { Trash2 } from 'lucide-react';
 import { Card } from '../components/ui/Card';
 import { Input } from '../components/ui/Input';
 import { Button } from '../components/ui/Button';
 import { Select } from '../components/ui/Select';
 import { MonthPicker } from '../components/ui/MonthPicker';
+import { ApplyScopeControl } from '../components/planning/ApplyScopeControl';
+import { MonthStatusStrip } from '../components/planning/MonthStatusStrip';
 import { useCategories, useSubcategories } from '../hooks/useExpenses';
 import {
   useBudgets,
@@ -13,7 +15,20 @@ import {
   useUpdateBudget,
   useDeleteBudget,
 } from '../hooks/useBudgets';
+import {
+  useMonthPlanStatuses,
+  useMonthPlan,
+  useConfirmMonth,
+  useSetExpectedIncome,
+} from '../hooks/useMonthPlans';
 import { useToast } from '../contexts/ToastContext';
+import {
+  DEFAULT_APPLY_CHOICE,
+  applyScopeError,
+  toApplyScope,
+  type ApplyChoice,
+} from '../lib/applyScope';
+import { monthLabel, shiftMonth } from '../lib/monthMath';
 import styles from './Planning.module.css';
 import type { Budget } from '../types';
 import { monthlyEquivalent } from '../lib/budgetMath';
@@ -25,6 +40,10 @@ const FREQUENCIES: Budget['frequency'][] = [
   'Annually',
 ];
 
+/** The status strip shows this many months before and after the selected one. */
+const STRIP_MONTHS_BEFORE = 3;
+const STRIP_MONTHS_AFTER = 8;
+
 function formatCurrency(amount: number) {
   return new Intl.NumberFormat('en-US', {
     style: 'currency',
@@ -32,46 +51,74 @@ function formatCurrency(amount: number) {
   }).format(amount);
 }
 
+function formatConfirmedAt(value: string) {
+  const parsed = parseISO(value);
+  return isValid(parsed) ? format(parsed, 'MMM d, yyyy') : value;
+}
+
 /**
- * Planning — edit one month's budget.
+ * Planning — edit one month's budget and expected income.
  *
- * Edits apply immediately (there are no drafts). A line keeps its amount from
- * the month it was set until its next change, so a month with no edits of its
- * own simply follows the months before it. An edit here carries forward to later
- * months until they are changed, and never touches earlier months.
+ * Edits apply immediately (there are no drafts). A line keeps its amount from the
+ * month it was set until its next change, so a month with no edits of its own
+ * follows the months before it. The "Applies to" control decides how far an amount
+ * or income change reaches from the selected month. Confirming a month ("Keep as
+ * is") marks it reviewed and writes nothing to the budget.
  */
 export const Planning: React.FC = () => {
   const { showToast } = useToast();
 
   const [month, setMonth] = useState(format(new Date(), 'yyyy-MM'));
 
-  // Form state
+  // Line form
   const [editKey, setEditKey] = useState<string | null>(null);
   const [category, setCategory] = useState('');
   const [subcategory, setSubcategory] = useState('');
   const [frequency, setFrequency] = useState<Budget['frequency']>('Monthly');
   const [limit, setLimit] = useState('');
 
+  // Expected income form
+  const [incomeInput, setIncomeInput] = useState('');
+
+  // Shared by line and income writes
+  const [applyChoice, setApplyChoice] = useState<ApplyChoice>(DEFAULT_APPLY_CHOICE);
+
   // UI state
   const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set());
+  const categoryRef = useRef<HTMLInputElement>(null);
 
-  const prevMonth = useMemo(
-    () => format(startOfMonth(subMonths(parseISO(`${month}-01`), 1)), 'yyyy-MM'),
-    [month],
-  );
+  const prevMonth = shiftMonth(month, -1);
+  const stripStart = shiftMonth(month, -STRIP_MONTHS_BEFORE);
+  const stripEnd = shiftMonth(month, STRIP_MONTHS_AFTER);
 
   const { data: categories } = useCategories(month);
   const { data: subcategories } = useSubcategories(category, month);
   const { data: budgets, isLoading } = useBudgets(month);
   const { data: prevBudgets } = useBudgets(prevMonth);
+  const { data: statuses } = useMonthPlanStatuses(stripStart, stripEnd);
+  const { data: plan } = useMonthPlan(month);
 
   const createBudget = useCreateBudget();
   const updateBudget = useUpdateBudget();
   const deleteBudget = useDeleteBudget();
+  const confirmMonth = useConfirmMonth();
+  const setIncome = useSetExpectedIncome();
 
   const lines = useMemo(() => budgets ?? [], [budgets]);
-  const inherited = lines.length > 0 && lines[0].inherited;
-  const busy = createBudget.isPending || updateBudget.isPending || deleteBudget.isPending;
+  const editing = useMemo(
+    () => lines.find((l) => l.line_key === editKey) ?? null,
+    [lines, editKey],
+  );
+  const confirmed = plan?.status === 'confirmed';
+  const scopeError = applyScopeError(month, applyChoice);
+  const budgetBusy = createBudget.isPending || updateBudget.isPending || deleteBudget.isPending;
+  const busy = budgetBusy || confirmMonth.isPending || setIncome.isPending;
+
+  // Names are stored once for the whole line, so a category or subcategory edit
+  // changes every month and ignores "Applies to". Say so before the user saves.
+  const nameChanged =
+    editing !== null &&
+    (category !== editing.category || subcategory !== editing.subcategory);
 
   const prevMonthlyEquiv = useMemo(() => {
     const map = new Map<string, number>();
@@ -89,15 +136,17 @@ export const Planning: React.FC = () => {
     setLimit('');
   };
 
-  // A new month starts from a clean slate — no stale edit or selection.
+  // A new month starts from a clean slate: no stale edit, selection or scope.
   useEffect(() => {
     setSelectedKeys(new Set());
-    setEditKey(null);
-    setCategory('');
-    setSubcategory('');
-    setFrequency('Monthly');
-    setLimit('');
+    resetForm();
+    setApplyChoice(DEFAULT_APPLY_CHOICE);
   }, [month]);
+
+  // Show the saved income for the month, including after a save refetches it.
+  useEffect(() => {
+    setIncomeInput(plan?.expected_income != null ? String(plan.expected_income) : '');
+  }, [month, plan?.expected_income]);
 
   const handleRowClick = (line: Budget) => {
     setEditKey(line.line_key);
@@ -115,12 +164,15 @@ export const Planning: React.FC = () => {
   };
 
   const handleDeleteSelected = async () => {
+    if (scopeError) return;
     const keys = Array.from(selectedKeys);
+    const scope = toApplyScope(applyChoice);
     try {
       for (const key of keys) {
-        await deleteBudget.mutateAsync({ lineKey: key, month });
+        await deleteBudget.mutateAsync({ lineKey: key, month, scope });
       }
       setSelectedKeys(new Set());
+      setApplyChoice(DEFAULT_APPLY_CHOICE);
       showToast(keys.length === 1 ? 'Budget line deleted' : 'Budget lines deleted', 'success');
     } catch (e: any) {
       showToast(e?.message || 'Could not delete the selected lines', 'error');
@@ -129,7 +181,9 @@ export const Planning: React.FC = () => {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (scopeError) return;
     const amount = parseFloat(limit) || 0;
+    const scope = toApplyScope(applyChoice);
 
     try {
       if (editKey) {
@@ -137,6 +191,7 @@ export const Planning: React.FC = () => {
           lineKey: editKey,
           month,
           data: { category, subcategory, frequency, limit_amount: amount },
+          scope,
         });
         showToast('Budget line updated', 'success');
       } else {
@@ -146,36 +201,121 @@ export const Planning: React.FC = () => {
           subcategory,
           frequency,
           limit_amount: amount,
+          ...scope,
         });
         showToast('Budget line added', 'success');
       }
       resetForm();
+      setApplyChoice(DEFAULT_APPLY_CHOICE);
     } catch (e: any) {
       showToast(e?.message || 'Could not save the budget line', 'error');
     }
   };
 
-  const monthLabel = format(parseISO(`${month}-01`), 'MMMM yyyy');
-  const prevMonthLabel = format(parseISO(`${prevMonth}-01`), 'MMM yyyy');
+  const handleIncomeSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (scopeError) return;
+    const amount = parseFloat(incomeInput);
+    if (!Number.isFinite(amount) || amount < 0) {
+      showToast('Enter an expected income of zero or more', 'error');
+      return;
+    }
+    try {
+      await setIncome.mutateAsync({ month, amount, scope: toApplyScope(applyChoice) });
+      setApplyChoice(DEFAULT_APPLY_CHOICE);
+      showToast('Expected income saved', 'success');
+    } catch (e: any) {
+      showToast(e?.message || 'Could not save the expected income', 'error');
+    }
+  };
+
+  const handleKeepAsIs = async () => {
+    try {
+      await confirmMonth.mutateAsync(month);
+      showToast(`${monthLabel(month)} confirmed`, 'success');
+    } catch (e: any) {
+      showToast(e?.message || 'Could not confirm the month', 'error');
+    }
+  };
+
+  const handleEdit = () => {
+    categoryRef.current?.focus();
+  };
+
+  const monthLabelText = monthLabel(month);
+  const prevMonthLabel = monthLabel(prevMonth);
   const totalMonthlyBudgeted = lines.reduce(
     (sum, b) => sum + monthlyEquivalent(b.limit_amount, b.frequency),
     0,
   );
+  const expectedIncome = plan?.expected_income ?? null;
+  const incomeLessBudget = expectedIncome === null ? null : expectedIncome - totalMonthlyBudgeted;
+
+  let statusText = 'Loading…';
+  if (plan && confirmed) {
+    const when = plan.confirmed_at ? ` on ${formatConfirmedAt(plan.confirmed_at)}` : '';
+    statusText = `Confirmed${when}.`;
+  } else if (plan) {
+    statusText =
+      `${monthLabelText} is not confirmed. Its lines follow ${prevMonthLabel} until changed. ` +
+      'Keep as is marks it reviewed and does not change the budget.';
+  }
 
   return (
     <div className={styles.container}>
-      {/* Sidebar Form */}
+      {/* Sidebar */}
       <div className={styles.sidebar}>
         <Card padding="lg">
           <div style={{ marginBottom: '1.5rem' }}>
             <MonthPicker label="Budget Month" value={month} onChange={setMonth} required />
           </div>
+          <ApplyScopeControl
+            month={month}
+            value={applyChoice}
+            onChange={setApplyChoice}
+            error={scopeError}
+          />
+        </Card>
 
-          <h3 style={{ marginTop: '0.5rem', marginBottom: '1rem', fontSize: '1.1rem' }}>
+        <Card padding="lg">
+          <h3 style={{ marginTop: 0, marginBottom: '1rem', fontSize: '1.1rem' }}>
+            Expected income
+          </h3>
+          <form onSubmit={handleIncomeSubmit} className={styles.formCard}>
+            <Input
+              id="expected-income"
+              label="Expected income"
+              type="number"
+              step="0.01"
+              min="0"
+              value={incomeInput}
+              onChange={(e) => setIncomeInput(e.target.value)}
+              required
+            />
+            {plan?.income_set_in && (
+              <p className={styles.hint}>
+                Set in {monthLabel(plan.income_set_in)}; it carries forward until changed.
+              </p>
+            )}
+            <div className={styles.buttonGroup}>
+              <Button
+                type="submit"
+                style={{ flex: 1 }}
+                disabled={busy || !!scopeError || incomeInput.trim() === ''}
+              >
+                Save income
+              </Button>
+            </div>
+          </form>
+        </Card>
+
+        <Card padding="lg">
+          <h3 style={{ marginTop: 0, marginBottom: '1rem', fontSize: '1.1rem' }}>
             {editKey ? 'Edit Line' : 'Add Line'}
           </h3>
           <form onSubmit={handleSubmit} className={styles.formCard}>
             <Input
+              ref={categoryRef}
               label="Category"
               list="categories-list"
               value={category}
@@ -207,8 +347,15 @@ export const Planning: React.FC = () => {
               required
             />
 
+            {nameChanged && (
+              <p className={styles.notice}>
+                Changing the category or subcategory applies to every month this line exists
+                in; "Applies to" does not limit it. Amount and frequency follow "Applies to".
+              </p>
+            )}
+
             <div className={styles.buttonGroup}>
-              <Button type="submit" style={{ flex: 1 }} disabled={busy}>
+              <Button type="submit" style={{ flex: 1 }} disabled={busy || !!scopeError}>
                 {editKey ? 'Save Line' : 'Add Line'}
               </Button>
               {editKey && (
@@ -236,35 +383,57 @@ export const Planning: React.FC = () => {
       <div className={styles.mainArea}>
         {/* Summary Row */}
         <div className={styles.summaryRow}>
-          <div className={styles.summaryItem} style={{ flex: 2 }}>
-            <span className={styles.summaryLabel}>Total monthly budget — {monthLabel}</span>
+          <div className={styles.summaryItem}>
+            <span className={styles.summaryLabel}>Expected income</span>
+            <span className={styles.summaryValue}>
+              {expectedIncome === null ? 'Not set' : formatCurrency(expectedIncome)}
+            </span>
+          </div>
+          <div className={styles.summaryItem}>
+            <span className={styles.summaryLabel}>Budgeted per month</span>
             <span className={styles.summaryValue}>{formatCurrency(totalMonthlyBudgeted)}</span>
+          </div>
+          <div className={styles.summaryItem}>
+            <span className={styles.summaryLabel}>Income less budget</span>
+            <span
+              className={`${styles.summaryValue} ${
+                incomeLessBudget !== null && incomeLessBudget < 0 ? styles.danger : ''
+              }`}
+            >
+              {incomeLessBudget === null ? '—' : formatCurrency(incomeLessBudget)}
+            </span>
           </div>
         </div>
 
-        {inherited && (
-          <div
-            style={{
-              marginBottom: '1rem',
-              padding: '0.75rem 1rem',
-              borderRadius: '6px',
-              background: 'var(--color-surface-raised)',
-              color: 'var(--color-text-muted)',
-              fontSize: '0.9rem',
-            }}
-          >
-            {monthLabel} follows {prevMonthLabel} and has not been confirmed. An edit here
-            carries forward to later months until they are changed — it never affects{' '}
-            {prevMonthLabel} or earlier.
+        {/* Month status */}
+        <Card padding="md">
+          <MonthStatusStrip months={statuses ?? []} selected={month} onSelect={setMonth} />
+          <div className={styles.statusRow}>
+            <p className={styles.statusText}>{statusText}</p>
+            <div className={styles.buttonGroup}>
+              {!confirmed && (
+                <Button size="sm" onClick={handleKeepAsIs} disabled={busy || !plan}>
+                  Keep as is
+                </Button>
+              )}
+              <Button size="sm" variant="ghost" onClick={handleEdit}>
+                Edit
+              </Button>
+            </div>
           </div>
-        )}
+        </Card>
 
         {/* Lines */}
         <div className={styles.section}>
           <div className={styles.sectionHeader}>
             <h2 className={styles.sectionTitle}>Budget Lines</h2>
             {selectedKeys.size > 0 && (
-              <Button variant="danger" size="sm" onClick={handleDeleteSelected} disabled={busy}>
+              <Button
+                variant="danger"
+                size="sm"
+                onClick={handleDeleteSelected}
+                disabled={busy || !!scopeError}
+              >
                 <Trash2 size={16} style={{ marginRight: 6 }} />
                 Delete Selected
               </Button>
@@ -303,7 +472,7 @@ export const Planning: React.FC = () => {
                 ) : lines.length === 0 ? (
                   <tr>
                     <td colSpan={7} style={{ textAlign: 'center', padding: '1rem' }}>
-                      No budget lines for {monthLabel}.
+                      No budget lines for {monthLabelText}.
                     </td>
                   </tr>
                 ) : (

@@ -22,6 +22,16 @@ FREQUENCY_DIVISORS: dict[str, int] = {
 }
 
 
+def is_period_start(frequency: str, month: str) -> bool:
+    """True when ``month`` (``YYYY-MM``) opens a calendar-aligned period of ``frequency``."""
+    return (int(month[5:7]) - 1) % FREQUENCY_DIVISORS[frequency] == 0
+
+
+def is_period_end(frequency: str, month: str) -> bool:
+    """True when ``month`` (``YYYY-MM``) is the last month of a calendar-aligned period."""
+    return int(month[5:7]) % FREQUENCY_DIVISORS[frequency] == 0
+
+
 def monthly_equivalent(limit: float, frequency: str) -> float:
     """
     A per-period `limit` expressed as a monthly amount.

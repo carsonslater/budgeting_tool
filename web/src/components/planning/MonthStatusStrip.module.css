@@ -1,0 +1,37 @@
+.strip {
+  display: flex;
+  gap: 0.5rem;
+  overflow-x: auto;
+  padding-bottom: 0.25rem;
+}
+
+.chip {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.4rem;
+  min-width: 118px;
+  padding: 0.55rem 0.75rem;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-surface);
+  color: var(--color-text);
+  font: inherit;
+  cursor: pointer;
+}
+
+.chip:hover {
+  background: var(--color-surface-raised);
+}
+
+.selected {
+  border-color: var(--color-accent);
+  background: rgba(255, 103, 25, 0.08);
+}
+
+.month {
+  font-family: 'Spectral', serif;
+  font-weight: 600;
+  font-size: 0.9rem;
+  white-space: nowrap;
+}
