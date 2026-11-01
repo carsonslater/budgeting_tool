@@ -21,10 +21,10 @@ Replaces an older R/Shiny monolith.
 Commits are allowed when asked. Prefer minimal diffs. The `edit` tool and the `write` tool have both
 caused black-style churn in Python, so use targeted edits for small changes.
 
-**Committed and pushed (as of this update).** The last commit is `ad316f0`, on `origin/dev`. It
-carries id-based category reads plus, from `f4f8dd9`, the per-month Planning UI, the income
-consolidation, the per-version frequency change, and migrations `m0004`/`m0005`; the tree was clean
-when it was made. Check `git status` before assuming a file is clean.
+**Committed and pushed.** The last feature commit is `ad316f0`, on `origin/dev`. It carries id-based
+category reads plus, from `f4f8dd9`, the per-month Planning UI, the income consolidation, the
+per-version frequency change, and migrations `m0004`/`m0005`. Later commits may only touch this file.
+Check `git status` before assuming a file is clean.
 
 ## Budget model
 
@@ -95,18 +95,59 @@ complete months preceding the target. It returns 400 for bad input, 404 when a l
 the month, and 409 on conflict. A failed request writes nothing). `month_plans.py`
 (`GET /api/month-plans?start&end` for at most 36 months, `GET /{month}`, `POST /{month}/confirm`,
 `PUT /{month}/income`). `reporting.py` (`budget_summary` per month). `categories.py` (`/active`;
-rename updates `categories` and `expenses` only). `expenses.py` (`/subcategories`, trailing 12
-months). `import_csv.py`, `goals.py`. The `/api/income` router has been removed.
+rename updates `categories` and `expenses` only; also owns the expense read projection). `expenses.py`
+(list accepts `category_id`/`subcategory_id` as well as names; `/subcategories`, trailing 12 months).
+`import_csv.py`, `goals.py`. The `/api/income` router has been removed.
+
+## Goal ledger and sweeps (Phase 3)
+
+- `backend/sweep_math.py`: pure arithmetic (`fund_month`, `leftover`, `allocate`). No DB access.
+- `backend/goal_ledger.py`: the only module that touches `goal_allocations` and `sweep_rules`. Like
+  `budget_store`, it never commits. Keys: `list_rules`, `create_rule`, `update_rule`, `delete_rule`,
+  `goal_balances`, `goal_contributions`, `add_withdrawal`, `compute_proposal`, `approve`, `reopen`.
+- Errors: `ValueError` maps to 400, `LookupError` to 404, `LedgerConflict` to 409.
+- `goal_allocations` is append-only, with one owner per row. Goal kinds `sweep` and `withdrawal` set
+  `goal_id`. Fund kinds `reserve`, `draw`, and `opening` set `line_key`. A `reversal` points at
+  `reverses_id`. Signs: sweep, reserve, and opening are positive; withdrawal and draw are negative.
+  A balance is the sum of an owner's rows. Both foreign keys are `RESTRICT`.
+- Leftover for month M = income (`effective_expected_income`) minus regular spend, minus reserves,
+  minus shortfall. Regular spend is Monthly-type expenses not filed under an irregular line active in
+  M. Irregular lines are non-Monthly budget lines active in M, and each one's monthly equivalent is its
+  reserve. A fund draws `min(bill, balance_before + reserve)`. The uncovered part is shortfall, which
+  reduces that month's leftover once. Funds never go negative. Pot = max(0, leftover).
+- Split: eligible goals are incomplete goals with rules. Fixed rules are paid by priority, capped by the
+  pot and by goal need (target minus balance). Percentages share the post-fixed remainder, capped the
+  same way. The remainder is Unallocated, with no overflow.
+- Approval (`approve`): recomputes the proposal and returns 409 if the accepted amounts differ. Guards:
+  the month must have ended (at or before the previous month), must not already be closed, and must
+  follow a closed month if any month is closed. It writes reserve, draw, and sweep rows plus a
+  `closed_months` record of the figures. Reopen appends reversals for sweep, reserve, and draw rows and
+  deletes the `closed_months` row. It is refused while a later month is closed.
+- Routes: `/api/sweeps/rules` (CRUD; percentage rules total at most 100; priorities unique),
+  `/api/sweeps/closed`, `/api/sweeps/proposal?month=`, `/api/sweeps/{month}/approve`,
+  `/api/sweeps/{month}/reopen`. Goals: `GET /api/goals` adds `balance`, `contributed_this_month`, and
+  `needs_per_month`; `POST /api/goals/{id}/withdrawals`; `DELETE` returns 409 for a goal with ledger
+  history (mark it completed instead).
+- Frontend: `components/sweeps/SweepPanel.tsx` (on the Goals page) and `SweepRules.tsx`, with
+  `hooks/useSweeps.ts` and `api/sweeps.ts`. Closed months display the figures stored at close.
+- **Open gap: no opening balances.** The ledger starts empty, so the first approved month treats every
+  fund as starting at zero. A bill that month then shows a shortfall that is an artifact of the empty
+  ledger, not spending. Resolve this (opening rows) before the first live sweep.
+- Live DB state: no sweep rules, no closed months, and no goal allocations. The sweep does nothing
+  until rules exist. Income is inherited from 2020-01 (see Migrations), so every month has income unless
+  overridden.
+- Tests pin the latest version in `tests/test_migrations.py` and `tests/test_backup.py`. Update those
+  when adding m0007.
 
 ## Migrations
 
 `backend/migrations/runner.py` keys on `PRAGMA user_version`. The `MIGRATIONS` tuple is
-**append-only**. `LATEST_VERSION` is `max(version)`, currently **5**. `run_migrations` requires no
+**append-only**. `LATEST_VERSION` is `max(version)`, currently **6**. `run_migrations` requires no
 pending transaction and sets `PRAGMA foreign_keys=ON` before `BEGIN`. Helpers are in
 `migrations/helpers.py`.
 
-Shipped migrations are **frozen. Never edit them.** That covers `m0001` through `m0005`. The next
-change is `m0006`.
+Shipped migrations are **frozen. Never edit them.** That covers `m0001` through `m0006`. The next
+change is `m0007`.
 
 - `m0003` (filename predates the model) expands legacy `budgets` windows into versions. It is
   event-based and independent of today's date. Frequency is that of the most recent ever-in-effect
@@ -121,14 +162,19 @@ change is `m0006`.
   every past month, so the real past cadence is not recovered (see the legacy `budgets` table if it
   is ever needed). m0003's conversion keeps the stored amounts correct.
 
+- `m0006` creates `goal_allocations` (the goal ledger; see the Goal ledger section) and adds the close
+  figures to `closed_months` (`expected_income`, `regular_spend`, `reserve_total`, `shortfall`,
+  `swept_total`). `leftover_capped` is no longer written.
+
 **Startup runs migrations and snapshots first.** When migrations are pending and the DB has data,
 the lifespan writes `backups/pre_migration_v{from}_to_v{to}_{stamp}.db` via SQLite's backup API, then
 migrates. `POST /api/backup` uses the same helper (`database.snapshot_database`). Take DB copies with
 the backup API, never `shutil.copyfile`, because a plain copy can miss WAL pages.
 
-**The live DB is still at `user_version=3`.** It will migrate to 5 on the next app start, with a
-snapshot. A dry run on a backup-API copy showed v3 to v5 applying cleanly: every version row got a
-frequency, and every frequency matches its line.
+**The live DB is still at `user_version=3`.** It will migrate to 6 on the next app start, with a
+snapshot. A dry run on a backup-API copy (2026-11-01) applied m0004 to m0006 cleanly, with integrity OK.
+The live DB was not changed. m0004 placed the legacy $6,000 income at 2020-01, the earliest dated
+row (legacy budgets), not 2025-11.
 
 `scripts/verify_m0003_expansion.py` re-derives the old predicate independently, on a copy. Last run
 on the live DB (before m0004/m0005): OK, 59 lines / 108 versions over 96 months, idempotent.
@@ -187,10 +233,10 @@ on the live DB (before m0004/m0005): OK, 59 lines / 108 versions over 96 months,
   no inverse helper.
 - Dead CSS in `Planning.module.css` (`.suggestionUp`, `.suggestionDown`, `.incomeHeader`) predates
   any suggestions UI. There has never been one.
-- Goals and Dashboard still compute goal "saved" client-side from **all** expenses by matching
-  `goal_budget_links` category strings. That is category spending, not savings. `goals.target_month`
+- Goal "saved" now comes from the ledger (`balance` on `GET /api/goals`), not from expenses. Earlier
+  note: the matching on `goal_budget_links` strings was category spending, not savings. `goals.target_month`
   is stored `YYYY-MM-01` while the rest of the app uses `YYYY-MM`. `expenses.goal_id` exists but is
-  unused. `expense_type='Goal'` rows are matched by goal name (0 in the live DB).
+  unused. `expense_type='Goal'` rows are no longer read by the app (0 in the live DB).
 - **Category identity is by id end to end.** Expenses are filed under `category_id` /
   `subcategory_id`; every read resolves the name through `categories`, so a rename changes what is
   displayed without touching an expense row. `routers/categories.py` owns the projection
@@ -200,7 +246,11 @@ on the live DB (before m0004/m0005): OK, 59 lines / 108 versions over 96 months,
   only — grouping by the name alias resolves back to the text column in SQLite. The legacy text
   columns remain (written by the create/update paths and the rename dual-write) as the display
   fallback for id-less rows and for the CSV importer; there is no plan to drop them. The live DB has
-  0 rows without `category_id`.
+  0 rows without `category_id`. `tests/test_category_identity.py` pins the behavior by staling the
+  text copy and asserting attribution still follows the id. Write-path fixtures must stamp ids
+  (`resolve_category_ids`), as every production insert does.
+- `fetchCategories` and `fetchSubcategories` in `web/src/api/expenses.ts` are unused; pages get their
+  lists from `/api/categories/active` through `useCategories` / `useSubcategories`.
 - `useSubcategories` and `useCategories` share a query key in `hooks/useExpenses.ts`. Both call the
   same endpoint, so they agree today, but the key ignores the category argument.
 - Changing a line's frequency sends the apply scope to the server. The server validates it against the
@@ -213,7 +263,7 @@ on the live DB (before m0004/m0005): OK, 59 lines / 108 versions over 96 months,
 
 ## Current state
 
-Verified after the latest changes: backend 213 tests pass, frontend 30 tests pass, the build is
+Verified after the Phase 3 changes: backend 262 tests pass, frontend 34 tests pass, the build is
 clean. The property test for frequency edits is mutation-checked: disabling the switch validation
 makes five tests fail. The Planning UI has not been checked in a running browser.
 
@@ -224,7 +274,7 @@ makes five tests fail. The Planning UI has not been checked in a running browser
 | 0 migration runner, category IDs | Done. Reads identify by id and resolve names from `categories`; the denormalized text columns are kept as a fallback (see Gotchas). |
 | 1 annual lines out of monthly reporting | Done (`/summary` returns `{monthly, non_monthly}`). |
 | 2 category agility, rename by ID | Done, including id-based reads. |
-| 3 month-end sweep into goals | **Not started.** No `sweeps.py`, no hook, no UI. `sweep_rules` and `closed_months` have 0 rows. |
+| 3 month-end sweep into goals | Built (m0006, `goal_ledger.py`, `routers/sweeps.py`, sweep panel on Goals). Open: opening balances for the first sweep month; see the Goal ledger section. |
 | 4 month-by-month budgeting | Backend done. UI done for the status strip, Keep as is / Edit, Applies-to, and expected income. Not done: suggestions wiring, turnover modal. |
 
 Because Phase 3 does not exist, the synthetic-budget writes dropped from `goals.py` are **not
@@ -238,8 +288,8 @@ compensated**. Goals currently drive no monthly savings amount.
    are unused. "Apply" converts monthly equivalents to per-period amounts for non-monthly lines, with a
    test for that conversion.
 3. Blocking turnover modal on boot. It needs a baseline so history is not prompted.
-4. Phase 3 sweep: `m0006` for `goal_allocations` plus annual-bill funds, sweep endpoints and UI.
-   Move Goals' "saved" computation onto the ledger.
+4. Phase 3 opening balances: enter a starting balance per irregular-line fund for the first sweep
+   month (`kind='opening'`, already allowed by the CHECK). Needed before the first live sweep.
 5. Decide whether to amend the 09-28 plan in place or let later plans supersede it.
 
 ### Decisions
@@ -253,7 +303,7 @@ Implemented:
   Amounts are stored as entered. Earlier history keeps its latest frequency (backfilled).
 - Editing scope: every amount or frequency edit offers Applies to, default "Until changed" (`forward`).
 
-Not yet implemented:
+Phase 3 sweep design (built; the Goal ledger section records what differs in practice):
 
 - **Leftover** = expected income − actual spend − annual reserve. Each annual or non-monthly line's
   monthly equivalent is reserved and credited to a tracked per-line fund in the ledger. When the bill
