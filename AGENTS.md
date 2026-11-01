@@ -21,10 +21,10 @@ Replaces an older R/Shiny monolith.
 Commits are allowed when asked. Prefer minimal diffs. The `edit` tool and the `write` tool have both
 caused black-style churn in Python, so use targeted edits for small changes.
 
-**Committed and pushed (as of this update).** The last commit is `f4f8dd9`, on `origin/dev`. It
-carries the per-month Planning UI, the income consolidation, the per-version frequency change, and
-migrations `m0004`/`m0005`; the tree was clean when it was made. Check `git status` before assuming
-a file is clean.
+**Committed and pushed (as of this update).** The last commit is `ad316f0`, on `origin/dev`. It
+carries id-based category reads plus, from `f4f8dd9`, the per-month Planning UI, the income
+consolidation, the per-version frequency change, and migrations `m0004`/`m0005`; the tree was clean
+when it was made. Check `git status` before assuming a file is clean.
 
 ## Budget model
 
