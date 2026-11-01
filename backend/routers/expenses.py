@@ -19,7 +19,7 @@ from pydantic import BaseModel
 
 import budget_store
 from database import get_db
-from routers.categories import resolve_category_ids
+from routers.categories import resolve_category_ids, select_expenses
 
 router = APIRouter(prefix="/api/expenses", tags=["expenses"])
 
@@ -63,7 +63,11 @@ def _row_to_dict(row) -> dict:
 def list_categories() -> list[str]:
     with get_db() as conn:
         rows = conn.execute(
-            "SELECT DISTINCT category FROM expenses WHERE category != '' ORDER BY category"
+            """SELECT DISTINCT COALESCE(c.name, e.category) AS category
+                 FROM expenses e
+                 LEFT JOIN categories c ON c.id = e.category_id
+                WHERE COALESCE(c.name, e.category, '') != ''
+                ORDER BY category"""
         ).fetchall()
     return [r["category"] for r in rows]
 
@@ -85,10 +89,14 @@ def list_subcategories(category: Optional[str] = Query(None)) -> list[str]:
     Budget lines are read over the trailing 12 months (plan §11.3) — enough for a
     useful suggestion list without walking the whole history.
     """
-    sql_exp = "SELECT DISTINCT subcategory FROM expenses WHERE subcategory != ''"
+    sql_exp = """SELECT DISTINCT COALESCE(s.name, e.subcategory) AS subcategory
+                   FROM expenses e
+                   LEFT JOIN categories c ON c.id = e.category_id
+                   LEFT JOIN categories s ON s.id = e.subcategory_id
+                  WHERE COALESCE(s.name, e.subcategory, '') != ''"""
     params_exp: list = []
     if category:
-        sql_exp += " AND category = ?"
+        sql_exp += " AND COALESCE(c.name, e.category, '') = ?"
         params_exp.append(category)
 
     today = date.today()
@@ -111,27 +119,47 @@ def list_subcategories(category: Optional[str] = Query(None)) -> list[str]:
 def list_expenses(
     start: Optional[str] = Query(None, description="ISO date YYYY-MM-DD"),
     end: Optional[str] = Query(None, description="ISO date YYYY-MM-DD"),
-    category: Optional[str] = Query(None),
+    category: Optional[str] = Query(None, description="Category name"),
+    subcategory: Optional[str] = Query(None, description="Subcategory name"),
+    category_id: Optional[int] = Query(None),
+    subcategory_id: Optional[int] = Query(None),
     payer: Optional[str] = Query(None),
 ) -> list[dict]:
-    sql = "SELECT * FROM expenses WHERE 1=1"
+    """
+    Expenses with `category` / `subcategory` resolved from their ids.
+
+    Filters take either the id or the name; the name is matched against the
+    resolved name, so it always agrees with what the response shows.
+    """
+    clauses: list[str] = []
     params: list = []
     if start:
-        sql += " AND date >= ?"
+        clauses.append("e.date >= ?")
         params.append(start)
     if end:
-        sql += " AND date <= ?"
+        clauses.append("e.date <= ?")
         params.append(end)
+    if category_id is not None:
+        clauses.append("e.category_id = ?")
+        params.append(category_id)
     if category:
-        sql += " AND category = ?"
+        clauses.append("COALESCE(c.name, e.category, '') = ?")
         params.append(category)
+    if subcategory_id is not None:
+        clauses.append("e.subcategory_id = ?")
+        params.append(subcategory_id)
+    if subcategory:
+        clauses.append("COALESCE(s.name, e.subcategory, '') = ?")
+        params.append(subcategory)
     if payer:
-        sql += " AND payer = ?"
+        clauses.append("e.payer = ?")
         params.append(payer)
-    sql += " ORDER BY date DESC, id DESC"
 
+    where = " AND ".join(clauses) if clauses else "1=1"
     with get_db() as conn:
-        rows = conn.execute(sql, params).fetchall()
+        rows = select_expenses(
+            conn, where, tuple(params), order="e.date DESC, e.id DESC"
+        )
     return [_row_to_dict(r) for r in rows]
 
 
@@ -156,10 +184,8 @@ def create_expense(body: ExpenseCreate) -> dict:
             ),
         )
         conn.commit()
-        row = conn.execute(
-            "SELECT * FROM expenses WHERE id = ?", (cur.lastrowid,)
-        ).fetchone()
-    return _row_to_dict(row)
+        row = select_expenses(conn, "e.id = ?", (cur.lastrowid,))
+    return _row_to_dict(row[0])
 
 
 @router.patch("/{expense_id}")
@@ -188,13 +214,11 @@ def update_expense(expense_id: int, body: ExpenseUpdate) -> dict:
         values = list(updates.values()) + [expense_id]
         conn.execute(f"UPDATE expenses SET {set_clause} WHERE id = ?", values)
         conn.commit()
-        row = conn.execute(
-            "SELECT * FROM expenses WHERE id = ?", (expense_id,)
-        ).fetchone()
+        row = select_expenses(conn, "e.id = ?", (expense_id,))
 
-    if row is None:
+    if not row:
         raise HTTPException(status_code=404, detail="Expense not found")
-    return _row_to_dict(row)
+    return _row_to_dict(row[0])
 
 
 @router.delete("/{expense_id}", status_code=204)

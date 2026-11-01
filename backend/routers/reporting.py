@@ -88,16 +88,26 @@ def _status(spent: float, limit: float) -> str:
 
 
 def _spent_between(
-    conn, category: str, subcategory: str, start: str, end: str
+    conn,
+    category_id: int,
+    subcategory_id: int | None,
+    start: str,
+    end: str,
 ) -> float:
-    """Actual 'Monthly'-type spend for one category line within [start, end]."""
+    """
+    Actual 'Monthly'-type spend for one category line within [start, end].
+
+    Matched on the category ids, never on names: an expense carries the id it
+    was filed under, so a rename cannot split or lose its attribution.
+    """
     row = conn.execute(
         """SELECT COALESCE(SUM(amount), 0) AS spent
            FROM expenses
-           WHERE category = ? AND subcategory = ?
+           WHERE category_id = ?
+             AND COALESCE(subcategory_id, 0) = COALESCE(?, 0)
              AND date >= ? AND date <= ?
              AND expense_type = 'Monthly'""",
-        (category, subcategory, start, end),
+        (category_id, subcategory_id, start, end),
     ).fetchone()
     return row["spent"]
 
@@ -175,7 +185,11 @@ def budget_summary(
             key = line["line_key"]
             if line["frequency"] == "Monthly":
                 spent = _spent_between(
-                    conn, line["category"], line["subcategory"], first, last
+                    conn,
+                    line["category_id"],
+                    line["subcategory_id"],
+                    first,
+                    last,
                 )
                 limit = monthly_equivalent(line["limit_amount"], line["frequency"])
                 monthly.append(
@@ -200,8 +214,8 @@ def budget_summary(
                 accrue_from = _accrual_start(period_start, months_by_line.get(key, []))
                 spent = _spent_between(
                     conn,
-                    line["category"],
-                    line["subcategory"],
+                    line["category_id"],
+                    line["subcategory_id"],
                     accrue_from.isoformat(),
                     last,
                 )
@@ -253,7 +267,10 @@ def spending_trends(
             """
             params: list = [start_str]
             if category:
-                sql += " AND category = ?"
+                sql += (
+                    " AND category_id = (SELECT id FROM categories"
+                    " WHERE name = ? AND kind = 'category')"
+                )
                 params.append(category)
             sql += " GROUP BY period ORDER BY period"
         else:
@@ -266,7 +283,10 @@ def spending_trends(
             """
             params = [start_str]
             if category:
-                sql += " AND category = ?"
+                sql += (
+                    " AND category_id = (SELECT id FROM categories"
+                    " WHERE name = ? AND kind = 'category')"
+                )
                 params.append(category)
             sql += " GROUP BY period ORDER BY period"
 
@@ -280,23 +300,35 @@ def spending_by_category(
     start: Optional[str] = Query(None, description="ISO date"),
     end: Optional[str] = Query(None, description="ISO date"),
 ) -> list[dict]:
-    """Total spending grouped by category for a date range."""
+    """
+    Total spending grouped by category for a date range.
+
+    Grouped by the category ids and named from `categories`, so a rename merges
+    the rows under the current name instead of splitting the total in two.
+    """
     sql = """
-        SELECT category,
-               subcategory,
-               COALESCE(SUM(amount), 0) as total,
-               COUNT(*)                 as transaction_count
-        FROM expenses
-        WHERE expense_type = 'Monthly'
+        SELECT COALESCE(c.name, e.category, '')    AS category,
+               COALESCE(s.name, e.subcategory, '') AS subcategory,
+               COALESCE(SUM(e.amount), 0)          AS total,
+               COUNT(*)                            AS transaction_count
+        FROM expenses e
+        LEFT JOIN categories c ON c.id = e.category_id
+        LEFT JOIN categories s ON s.id = e.subcategory_id
+        WHERE e.expense_type = 'Monthly'
     """
     params: list = []
     if start:
-        sql += " AND date >= ?"
+        sql += " AND e.date >= ?"
         params.append(start)
     if end:
-        sql += " AND date <= ?"
+        sql += " AND e.date <= ?"
         params.append(end)
-    sql += " GROUP BY category, subcategory ORDER BY total DESC"
+    # Group by ids only: the names are a function of them, and grouping by the
+    # alias would resolve back to the denormalized text column in SQLite.
+    sql += """
+        GROUP BY e.category_id, e.subcategory_id
+        ORDER BY total DESC
+    """
 
     with get_db() as conn:
         rows = conn.execute(sql, params).fetchall()

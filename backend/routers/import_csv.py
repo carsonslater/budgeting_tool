@@ -257,23 +257,30 @@ def _auto_categorize(description: str, conn) -> tuple[str, str]:
 
         month = date.today().strftime("%Y-%m")
         lines, _inherited = budget_store.resolve_view(conn, month)
-        active_pairs = {
-            (line["category"], line["subcategory"])
+        # Candidates are keyed by category id; the names come from the line so the
+        # prediction shows what the user currently calls that category.
+        active = {
+            (line["category_id"], line["subcategory_id"]): (
+                line["category"],
+                line["subcategory"],
+            )
             for line in lines
             if line["limit_amount"] > 0
         }
 
-        if not active_pairs:
+        if not active:
             return "", ""
 
         rows = conn.execute(
-            "SELECT DISTINCT description, category, subcategory FROM expenses WHERE category != ''"
+            """SELECT DISTINCT description, category_id, subcategory_id
+                 FROM expenses
+                WHERE category_id IS NOT NULL"""
         ).fetchall()
 
         choices: dict[str, tuple[str, str]] = {}
         for r in rows:
-            pair = (r["category"], r["subcategory"])
-            if pair in active_pairs and r["description"].strip():
+            pair = active.get((r["category_id"], r["subcategory_id"]))
+            if pair is not None and r["description"].strip():
                 choices[r["description"].strip()] = pair
 
         if not choices:

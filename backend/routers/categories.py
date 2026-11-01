@@ -89,6 +89,47 @@ def resolve_category_ids(
     return cat_id, sub_id
 
 
+# ── Read projection: ids in, names out ───────────────────────────────────────
+
+
+# `category` / `subcategory` are the names the `categories` row currently holds,
+# reached through the expense's `*_id`. The denormalized text columns are only a
+# fallback for a row that never received ids; identity is always the id, so a
+# rename shows up here without touching a single expense row.
+#
+# The column list is explicit: an aliased name cannot override `SELECT e.*`, and
+# every consumer expects the full expense shape.
+EXPENSE_WITH_NAMES = """
+    SELECT e.id              AS id,
+           e.date            AS date,
+           e.description     AS description,
+           e.amount          AS amount,
+           e.payer           AS payer,
+           e.expense_type    AS expense_type,
+           e.goal_id         AS goal_id,
+           e.category_id     AS category_id,
+           e.subcategory_id  AS subcategory_id,
+           COALESCE(c.name, e.category, '')    AS category,
+           COALESCE(s.name, e.subcategory, '') AS subcategory
+      FROM expenses e
+      LEFT JOIN categories c ON c.id = e.category_id
+      LEFT JOIN categories s ON s.id = e.subcategory_id
+"""
+
+
+def select_expenses(
+    conn: sqlite3.Connection,
+    where: str = "1=1",
+    params: tuple = (),
+    order: str = "",
+):
+    """Query `expenses` with names resolved from the category ids."""
+    sql = f"{EXPENSE_WITH_NAMES} WHERE {where}"
+    if order:
+        sql += f" ORDER BY {order}"
+    return conn.execute(sql, params).fetchall()
+
+
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 

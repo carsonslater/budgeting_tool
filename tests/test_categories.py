@@ -371,9 +371,14 @@ def test_auto_categorize_expense_descriptions_only(db_path):
             subcategory="Groceries",
             limit_amount=500,
         )
+        cat_id, sub_id = resolve_category_ids(conn, "Food", "Groceries")
         conn.execute(
-            """INSERT INTO expenses (date, description, category, subcategory, amount, payer, expense_type)
-               VALUES ('2025-01-01', 'SAFEWAY STORE #123', 'Food', 'Groceries', 75.0, 'Joint', 'Monthly')"""
+            """INSERT INTO expenses
+                 (date, description, category, subcategory, amount, payer,
+                  expense_type, category_id, subcategory_id)
+               VALUES ('2025-01-01', 'SAFEWAY STORE #123', 'Food', 'Groceries',
+                       75.0, 'Joint', 'Monthly', ?, ?)""",
+            (cat_id, sub_id),
         )
         conn.commit()
 

@@ -9,9 +9,9 @@ Phase 1 acceptance criterion (plan §9, "Annual partition"):
 The defect this guards: a non-monthly limit used to be divided by its cadence
 divisor and compared against a single month's spend, so a $1200/yr line showed
 as an $100/mo line and turned into a false red flag in months with no matching
-spend. Budgets and expenses are matched by (category, subcategory) name, so the
-only thing keeping the two partitions from influencing each other is the
-partition itself — these tests pin that boundary.
+spend. Budgets and expenses are matched by category id, so the only thing keeping
+the two partitions from influencing each other is the partition itself — these
+tests pin that boundary.
 
 Budgets are versioned lines (2026-10-25 model). A line is active from its first
 version until it is ended, so a non-monthly line's accrual window starts at the first
@@ -32,6 +32,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "backend"))
 import budget_store
 import database
 from migrations import run_migrations
+from routers.categories import resolve_category_ids
 from routers.reporting import budget_summary
 
 
@@ -86,12 +87,17 @@ def _insert(db_path, budgets=(), expenses=()):
             apply="through",
             through=end,
         )
-    conn.executemany(
-        """INSERT INTO expenses
-             (date, description, category, subcategory, amount, payer, expense_type)
-           VALUES (?,?,?,?,?,?,?)""",
-        expenses,
-    )
+    for expense in expenses:
+        # Stamp the surrogate keys the way every write path does: reporting
+        # attributes spend by category id, not by name.
+        cat_id, sub_id = resolve_category_ids(conn, expense[2], expense[3])
+        conn.execute(
+            """INSERT INTO expenses
+                 (date, description, category, subcategory, amount, payer,
+                  expense_type, category_id, subcategory_id)
+               VALUES (?,?,?,?,?,?,?,?,?)""",
+            (*expense, cat_id, sub_id),
+        )
     conn.commit()
     conn.close()
 

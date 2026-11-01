@@ -140,19 +140,24 @@ def get_suggested_budgets(
         for line in active:
             cat = line["category"]
             sub = line["subcategory"]
-            current_limit = monthly_equivalent(
-                line["limit_amount"], line["frequency"]
-            )
+            current_limit = monthly_equivalent(line["limit_amount"], line["frequency"])
 
             monthly_spent: list[float] = []
             for month in month_starts:
+                # Attributed by category id: a rename never moves history.
                 row = conn.execute(
                     """SELECT COALESCE(SUM(amount), 0) AS total
                        FROM expenses
-                       WHERE category = ? AND subcategory = ?
+                       WHERE category_id = ?
+                         AND COALESCE(subcategory_id, 0) = COALESCE(?, 0)
                          AND date >= ? AND date <= ?
                          AND expense_type = 'Monthly'""",
-                    (cat, sub, f"{month}-01", _month_end(month)),
+                    (
+                        line["category_id"],
+                        line["subcategory_id"],
+                        f"{month}-01",
+                        _month_end(month),
+                    ),
                 ).fetchone()
                 monthly_spent.append(row["total"])
 

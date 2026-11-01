@@ -21,10 +21,10 @@ Replaces an older R/Shiny monolith.
 Commits are allowed when asked. Prefer minimal diffs. The `edit` tool and the `write` tool have both
 caused black-style churn in Python, so use targeted edits for small changes.
 
-**Uncommitted work (as of this update).** The last commit is `e0c051c`. The working tree holds the
-per-month Planning UI, the income consolidation, and the per-version frequency change, plus
-migrations `m0004` and `m0005`. Nothing from this work is committed yet. Check `git status` before
-assuming a file is clean.
+**Committed and pushed (as of this update).** The last commit is `f4f8dd9`, on `origin/dev`. It
+carries the per-month Planning UI, the income consolidation, the per-version frequency change, and
+migrations `m0004`/`m0005`; the tree was clean when it was made. Check `git status` before assuming
+a file is clean.
 
 ## Budget model
 
@@ -191,7 +191,16 @@ on the live DB (before m0004/m0005): OK, 59 lines / 108 versions over 96 months,
   `goal_budget_links` category strings. That is category spending, not savings. `goals.target_month`
   is stored `YYYY-MM-01` while the rest of the app uses `YYYY-MM`. `expenses.goal_id` exists but is
   unused. `expense_type='Goal'` rows are matched by goal name (0 in the live DB).
-- `_spent_between` and `/suggested` still match expenses to budgets by category **strings**, not ids.
+- **Category identity is by id end to end.** Expenses are filed under `category_id` /
+  `subcategory_id`; every read resolves the name through `categories`, so a rename changes what is
+  displayed without touching an expense row. `routers/categories.py` owns the projection
+  (`EXPENSE_WITH_NAMES` + `select_expenses`): `COALESCE(c.name, e.category)` so a row that never got
+  ids still shows its text. `reporting._spent_between`, `/suggested`, `spending_by_category`,
+  `_auto_categorize` and the expense list all match on ids. `spending_by_category` groups by ids
+  only — grouping by the name alias resolves back to the text column in SQLite. The legacy text
+  columns remain (written by the create/update paths and the rename dual-write) as the display
+  fallback for id-less rows and for the CSV importer; there is no plan to drop them. The live DB has
+  0 rows without `category_id`.
 - `useSubcategories` and `useCategories` share a query key in `hooks/useExpenses.ts`. Both call the
   same endpoint, so they agree today, but the key ignores the category argument.
 - Changing a line's frequency sends the apply scope to the server. The server validates it against the
@@ -204,7 +213,7 @@ on the live DB (before m0004/m0005): OK, 59 lines / 108 versions over 96 months,
 
 ## Current state
 
-Verified after the latest changes: backend 206 tests pass, frontend 30 tests pass, the build is
+Verified after the latest changes: backend 213 tests pass, frontend 30 tests pass, the build is
 clean. The property test for frequency edits is mutation-checked: disabling the switch validation
 makes five tests fail. The Planning UI has not been checked in a running browser.
 
@@ -212,9 +221,9 @@ makes five tests fail. The Planning UI has not been checked in a running browser
 
 | Phase | Status |
 |---|---|
-| 0 migration runner, category IDs | Done. The "contract" step (dropping legacy string columns) is not done. |
+| 0 migration runner, category IDs | Done. Reads identify by id and resolve names from `categories`; the denormalized text columns are kept as a fallback (see Gotchas). |
 | 1 annual lines out of monthly reporting | Done (`/summary` returns `{monthly, non_monthly}`). |
-| 2 category agility, rename by ID | Done. The contract step is not done. |
+| 2 category agility, rename by ID | Done, including id-based reads. |
 | 3 month-end sweep into goals | **Not started.** No `sweeps.py`, no hook, no UI. `sweep_rules` and `closed_months` have 0 rows. |
 | 4 month-by-month budgeting | Backend done. UI done for the status strip, Keep as is / Edit, Applies-to, and expected income. Not done: suggestions wiring, turnover modal. |
 
@@ -223,16 +232,15 @@ compensated**. Goals currently drive no monthly savings amount.
 
 ### Remaining
 
-1. Commit the uncommitted work once it has been reviewed (see Git).
-2. Check the Planning screen in a running app, including a frequency switch and the nearest-month
+1. Check the Planning screen in a running app, including a frequency switch and the nearest-month
    message.
-3. Wire `useSuggestedBudgets(month)` into `Planning.tsx`. The hook and `fetchSuggestedBudgets` exist but
+2. Wire `useSuggestedBudgets(month)` into `Planning.tsx`. The hook and `fetchSuggestedBudgets` exist but
    are unused. "Apply" converts monthly equivalents to per-period amounts for non-monthly lines, with a
    test for that conversion.
-4. Blocking turnover modal on boot. It needs a baseline so history is not prompted.
-5. Phase 3 sweep: `m0006` for `goal_allocations` plus annual-bill funds, sweep endpoints and UI.
+3. Blocking turnover modal on boot. It needs a baseline so history is not prompted.
+4. Phase 3 sweep: `m0006` for `goal_allocations` plus annual-bill funds, sweep endpoints and UI.
    Move Goals' "saved" computation onto the ledger.
-6. Decide whether to amend the 09-28 plan in place or let later plans supersede it.
+5. Decide whether to amend the 09-28 plan in place or let later plans supersede it.
 
 ### Decisions
 
