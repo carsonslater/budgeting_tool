@@ -96,6 +96,10 @@ export interface Goal {
   target_month: string;      // ISO YYYY-MM-DD (first of month)
   created_date: string;
   completed: 0 | 1;
+  // Ledger figures, returned by GET /api/goals.
+  balance?: number;
+  contributed_this_month?: number;
+  needs_per_month?: number | null;
 }
 
 export interface GoalCreate extends Omit<Goal, 'id'> {
@@ -114,6 +118,67 @@ export interface GoalLink {
 }
 
 export type GoalLinkCreate = Omit<GoalLink, 'id'>;
+
+// ── Sweeps ────────────────────────────────────────────────────────────────────
+
+export interface SweepRule {
+  id: number;
+  goal_id: number;
+  goal_name: string;
+  priority_rank: number;
+  allocation_type: 'fixed' | 'percentage';
+  amount: number;
+}
+export type SweepRuleCreate = Pick<SweepRule, 'goal_id' | 'priority_rank' | 'allocation_type' | 'amount'>;
+export type SweepRuleUpdate = Partial<SweepRuleCreate>;
+
+export interface SweepFund {
+  line_key: string;
+  name: string;
+  frequency: string;
+  reserve: number;
+  balance_before: number;
+  spent: number;
+  draw: number;
+  shortfall: number;
+  balance_after: number;
+}
+
+export interface SweepGoalLine {
+  goal_id: number;
+  name: string;
+  amount: number;
+  balance: number;
+  projected_balance: number;
+}
+
+export interface SweepProposal {
+  month: string;
+  income: number;
+  regular_spend: number;
+  irregular_spend: number;
+  reserve_total: number;
+  shortfall: number;
+  leftover: number;
+  pot: number;
+  swept_total: number;
+  unallocated: number;
+  funds: SweepFund[];
+  goals: SweepGoalLine[];
+  approvable: boolean;
+  blocked_reason: string | null;
+}
+
+export interface ClosedMonth {
+  month_id: string;
+  closed_at: string;
+  expected_income: number | null;
+  regular_spend: number | null;
+  reserve_total: number | null;
+  shortfall: number | null;
+  swept_total: number | null;
+  leftover_raw: number | null;
+}
 
 // ── Reporting ─────────────────────────────────────────────────────────────────
 
@@ -220,4 +285,3 @@ export interface MonthPlan extends MonthPlanStatus {
   expected_income: number | null;
   income_set_in: string | null;
 }
-

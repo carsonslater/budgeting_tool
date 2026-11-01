@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { format, parseISO, startOfMonth, endOfMonth, addMonths } from 'date-fns';
+import { format, parseISO, startOfMonth, addMonths } from 'date-fns';
 import { Check, X, Target, ChevronDown, ChevronRight } from 'lucide-react';
 import { Card } from '../components/ui/Card';
 import { Input } from '../components/ui/Input';
@@ -7,7 +7,7 @@ import { Button } from '../components/ui/Button';
 import { Badge } from '../components/ui/Badge';
 import { useCategories, useSubcategories } from '../hooks/useExpenses';
 import { useGoals, useGoalLinks, useGoalActions } from '../hooks/useGoals';
-import { useExpenses } from '../hooks/useExpenses';
+import { SweepPanel } from '../components/sweeps/SweepPanel';
 import { useMonthPlan } from '../hooks/useMonthPlans';
 import styles from './Goals.module.css';
 
@@ -21,10 +21,9 @@ function formatCurrency(amount: number) {
 export const Goals: React.FC = () => {
   const { data: goals, isLoading: loadingGoals } = useGoals();
   const { data: goalLinks } = useGoalLinks();
-  const { data: allExpenses } = useExpenses();
   const { data: plan } = useMonthPlan(format(new Date(), 'yyyy-MM'));
   const { data: categories } = useCategories();
-  const { create, update, remove, createLink, removeLink } = useGoalActions();
+  const { create, update, remove, createLink, removeLink, withdraw } = useGoalActions();
 
   // Goal Form
   const nextMonth = startOfMonth(addMonths(new Date(), 1));
@@ -38,6 +37,12 @@ export const Goals: React.FC = () => {
   const [showCompleted, setShowCompleted] = useState(false);
   const [expandedGoalId, setExpandedGoalId] = useState<number | null>(null);
   const [deleteGoalId, setDeleteGoalId] = useState<number | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+
+  // Withdrawal
+  const [withdrawGoalId, setWithdrawGoalId] = useState<number | null>(null);
+  const [withdrawAmount, setWithdrawAmount] = useState('');
+  const [withdrawError, setWithdrawError] = useState<string | null>(null);
 
   // Link Form
   const [linkCategory, setLinkCategory] = useState('');
@@ -89,9 +94,24 @@ export const Goals: React.FC = () => {
   };
 
   const handleDelete = async () => {
-    if (deleteGoalId !== null) {
+    if (deleteGoalId === null) return;
+    setDeleteError(null);
+    try {
       await remove.mutateAsync(deleteGoalId);
       setDeleteGoalId(null);
+    } catch (err) {
+      setDeleteError(err instanceof Error ? err.message : 'Delete failed');
+    }
+  };
+
+  const handleWithdraw = async (goalId: number) => {
+    setWithdrawError(null);
+    try {
+      await withdraw.mutateAsync({ id: goalId, amount: parseFloat(withdrawAmount) });
+      setWithdrawGoalId(null);
+      setWithdrawAmount('');
+    } catch (err) {
+      setWithdrawError(err instanceof Error ? err.message : 'Withdrawal failed');
     }
   };
 
@@ -112,43 +132,23 @@ export const Goals: React.FC = () => {
     });
   };
 
-  // Derivations
+  // Derivations: saved amounts come from the goal ledger, not from expenses.
   const { activeGoals, completedGoals, monthlyGoalSpending } = useMemo(() => {
     if (!goals) return { activeGoals: [], completedGoals: [], monthlyGoalSpending: 0 };
 
-    const now = new Date();
-    const currentStart = format(startOfMonth(now), 'yyyy-MM-dd');
-    const currentEnd = format(endOfMonth(now), 'yyyy-MM-dd');
-
-    let monthAllocated = 0;
-    allExpenses?.forEach(e => {
-      if (e.expense_type === 'Goal' && e.date >= currentStart && e.date <= currentEnd) {
-        monthAllocated += e.amount;
-      }
-    });
-
     const mapped = goals.map(g => {
       const links = goalLinks?.filter(l => l.goal_name === g.name) || [];
-      const saved = allExpenses?.reduce((sum, e) => {
-        const matchesLink = links.some(l => 
-          l.category === e.category && 
-          l.subcategory === e.subcategory && 
-          (!l.start_date || e.date >= l.start_date) &&
-          (!l.end_date || e.date <= l.end_date)
-        );
-        if (matchesLink) return sum + e.amount;
-        return sum;
-      }, 0) || 0;
-
-      return { ...g, saved, links };
+      return { ...g, saved: g.balance ?? 0, links };
     });
+
+    const monthSwept = goals.reduce((sum, g) => sum + (g.contributed_this_month ?? 0), 0);
 
     return {
       activeGoals: mapped.filter(g => g.completed === 0),
       completedGoals: mapped.filter(g => g.completed === 1),
-      monthlyGoalSpending: monthAllocated,
+      monthlyGoalSpending: monthSwept,
     };
-  }, [goals, goalLinks, allExpenses]);
+  }, [goals, goalLinks]);
 
   const totalIncome = plan?.expected_income ?? 0;
   const pctIncomeAllocated = totalIncome ? Math.round((monthlyGoalSpending / totalIncome) * 100) : 0;
@@ -198,7 +198,7 @@ export const Goals: React.FC = () => {
           </form>
 
           <div className={styles.summaryBox}>
-            <div className={styles.summaryTitle}>Monthly Allocation Summary</div>
+            <div className={styles.summaryTitle}>Swept to goals this month</div>
             <div className={styles.summaryValue}>{formatCurrency(monthlyGoalSpending)}</div>
             <div className={styles.summarySubtext}>
               {pctIncomeAllocated}% of {formatCurrency(totalIncome)} income
@@ -209,10 +209,12 @@ export const Goals: React.FC = () => {
 
       {/* Main Area */}
       <div className={styles.mainArea}>
+        <SweepPanel />
+
         <div className={styles.sectionHeader}>
           <h2 className={styles.sectionTitle}>Active Goals</h2>
         </div>
-        
+
         {loadingGoals ? (
           <div style={{ color: 'var(--color-text-muted)' }}>Loading goals...</div>
         ) : activeGoals.length === 0 ? (
@@ -224,9 +226,9 @@ export const Goals: React.FC = () => {
               const isExpanded = expandedGoalId === g.id;
 
               return (
-                <Card 
-                  key={g.id} 
-                  padding="lg" 
+                <Card
+                  key={g.id}
+                  padding="lg"
                   className={`${styles.goalCard} ${isExpanded ? styles.goalCardExpanded : ''}`}
                 >
                   <div className={styles.goalHeader}>
@@ -235,6 +237,9 @@ export const Goals: React.FC = () => {
                       {g.name}
                     </div>
                     <div className={styles.goalActions}>
+                      <Button variant="ghost" size="sm" onClick={(e) => { e.stopPropagation(); setWithdrawError(null); setWithdrawGoalId(withdrawGoalId === g.id ? null : g.id); }}>
+                        Withdraw
+                      </Button>
                       <Button variant="ghost" size="sm" onClick={(e) => handleComplete(g.id, e)} style={{ color: 'var(--color-success)' }}>
                         <Check size={16} style={{ marginRight: 4 }} /> Complete
                       </Button>
@@ -245,8 +250,32 @@ export const Goals: React.FC = () => {
                   </div>
 
                   <div className={styles.goalStats}>
-                    <b>{formatCurrency(g.saved)}</b> spent of {formatCurrency(g.target_amount)} target
+                    <b>{formatCurrency(g.saved)}</b> saved of {formatCurrency(g.target_amount)} target
+                    {g.needs_per_month != null && g.needs_per_month > 0 && (
+                      <> &middot; needs {formatCurrency(g.needs_per_month)}/month</>
+                    )}
                   </div>
+
+                  {withdrawGoalId === g.id && (
+                    <div className={styles.linksForm}>
+                      <Input
+                        label="Withdraw amount"
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        value={withdrawAmount}
+                        onChange={e => setWithdrawAmount(e.target.value)}
+                      />
+                      <div className={styles.linkButtonWrapper}>
+                        <Button size="sm" loading={withdraw.isPending} onClick={() => handleWithdraw(g.id)}>
+                          Confirm withdrawal
+                        </Button>
+                      </div>
+                      {withdrawError && (
+                        <div style={{ color: 'var(--color-danger)', fontSize: '0.85rem' }}>{withdrawError}</div>
+                      )}
+                    </div>
+                  )}
 
                   <div className={styles.progressWrapper}>
                     <div className={styles.progressBarContainer}>
@@ -275,10 +304,10 @@ export const Goals: React.FC = () => {
                     {g.links.map(l => (
                       <div key={l.id} className={styles.chip}>
                         {l.category} {l.subcategory ? `> ${l.subcategory}` : ''}
-                        <X 
-                          size={14} 
-                          className={styles.chipRemove} 
-                          onClick={(e) => { e.stopPropagation(); removeLink.mutate(l.id); }} 
+                        <X
+                          size={14}
+                          className={styles.chipRemove}
+                          onClick={(e) => { e.stopPropagation(); removeLink.mutate(l.id); }}
                         />
                       </div>
                     ))}
@@ -313,9 +342,9 @@ export const Goals: React.FC = () => {
                           onChange={e => setLinkEnd(e.target.value)}
                         />
                         <div className={styles.linkButtonWrapper}>
-                          <Button 
-                            size="sm" 
-                            disabled={!linkCategory} 
+                          <Button
+                            size="sm"
+                            disabled={!linkCategory}
                             loading={createLink.isPending}
                             onClick={() => handleCreateLink(g.name)}
                           >
@@ -340,7 +369,7 @@ export const Goals: React.FC = () => {
                 Completed Goals ({completedGoals.length})
               </h2>
             </div>
-            
+
             {showCompleted && (
               <div className={styles.goalList} style={{ marginTop: '0.5rem', opacity: 0.8 }}>
                 {completedGoals.map(g => {
@@ -353,10 +382,10 @@ export const Goals: React.FC = () => {
                           <Badge variant="muted">Completed</Badge>
                         </div>
                         <div className={styles.goalActions}>
-                          <Button 
-                            variant="ghost" 
-                            size="sm" 
-                            onClick={(e) => { e.stopPropagation(); setDeleteGoalId(g.id); }} 
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={(e) => { e.stopPropagation(); setDeleteGoalId(g.id); }}
                             style={{ color: 'var(--color-danger)' }}
                           >
                             <X size={16} />
@@ -395,8 +424,12 @@ export const Goals: React.FC = () => {
           <div className={styles.modalContent}>
             <h3 style={{ marginTop: 0 }}>Delete Goal?</h3>
             <p style={{ color: 'var(--color-text-muted)', marginBottom: '1rem' }}>
-              Are you sure you want to delete this goal? Linked expenses will remain in the database.
+              Are you sure you want to delete this goal? A goal with sweep or withdrawal history
+              cannot be deleted; mark it complete instead.
             </p>
+            {deleteError && (
+              <p style={{ color: 'var(--color-danger)', marginBottom: '1rem' }}>{deleteError}</p>
+            )}
             <div className={styles.modalActions}>
               <Button variant="ghost" onClick={() => setDeleteGoalId(null)}>Cancel</Button>
               <Button variant="danger" loading={remove.isPending} onClick={handleDelete}>

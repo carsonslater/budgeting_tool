@@ -28,6 +28,7 @@ from routers import (
     import_csv,
     categories,
     month_plans,
+    sweeps,
 )
 
 
@@ -91,6 +92,7 @@ app.include_router(budgets.router)
 app.include_router(categories.router)
 app.include_router(month_plans.router)
 app.include_router(goals.router)
+app.include_router(sweeps.router)
 app.include_router(reporting.router)
 app.include_router(import_csv.router)
 

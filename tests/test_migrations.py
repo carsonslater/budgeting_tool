@@ -186,11 +186,11 @@ class TestRunner:
         assert versions == sorted(set(versions))
         assert LATEST_VERSION == versions[-1]
 
-    def test_contract_version_is_five(self):
-        assert LATEST_VERSION == 5
+    def test_contract_version_is_six(self):
+        assert LATEST_VERSION == 6
 
     def test_applies_every_version_from_zero(self, conn):
-        assert run_migrations(conn) == [1, 2, 3, 4, 5]
+        assert run_migrations(conn) == [1, 2, 3, 4, 5, 6]
         assert get_user_version(conn) == LATEST_VERSION
 
     def test_second_run_is_a_noop(self, migrated):
@@ -201,7 +201,7 @@ class TestRunner:
         # Pretend version 1 is done; 2 and 3 should run.
         run_migrations(conn, MIGRATIONS[:1])
         assert get_user_version(conn) == 1
-        assert run_migrations(conn) == [2, 3, 4, 5]
+        assert run_migrations(conn) == [2, 3, 4, 5, 6]
 
     def test_rejects_a_connection_with_pending_work(self, conn):
         conn.execute(
@@ -753,7 +753,7 @@ class TestMigration3:
 
         before = snapshot()
         migrated.execute("PRAGMA user_version = 2;")
-        assert run_migrations(migrated) == [3, 4, 5]
+        assert run_migrations(migrated) == [3, 4, 5, 6]
         assert snapshot() == before
 
     def test_legacy_tables_are_left_intact(self, migrated):

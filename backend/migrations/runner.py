@@ -11,6 +11,7 @@ from .m0002_category_identity import migrate as _m0002
 from .m0003_per_month_budgets import migrate as _m0003
 from .m0004_retire_income_sources import migrate as _m0004
 from .m0005_frequency_per_version import migrate as _m0005
+from .m0006_goal_ledger import migrate as _m0006
 
 
 @dataclass(frozen=True)
@@ -33,6 +34,7 @@ MIGRATIONS: tuple[Migration, ...] = (
         4, "retire income_sources: carry the single figure into month_plans", _m0004
     ),
     Migration(5, "frequency per version: budget_amounts.frequency", _m0005),
+    Migration(6, "goal ledger: goal_allocations, closed_months close figures", _m0006),
 )
 
 LATEST_VERSION: int = max(m.version for m in MIGRATIONS)

@@ -87,7 +87,7 @@ class TestStartupSnapshot:
             pass
 
         [snap] = backups(db_path)
-        assert snap.name.startswith("pre_migration_v0_to_v5_")
+        assert snap.name.startswith("pre_migration_v0_to_v6_")
         # The snapshot is the pre-migration state: no versioned budget tables yet.
         copy = sqlite3.connect(str(snap))
         try:
@@ -100,7 +100,7 @@ class TestStartupSnapshot:
 
         live = sqlite3.connect(str(db_path))
         try:
-            assert live.execute("PRAGMA user_version").fetchone()[0] == 5
+            assert live.execute("PRAGMA user_version").fetchone()[0] == 6
         finally:
             live.close()
 

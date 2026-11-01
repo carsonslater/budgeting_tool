@@ -7,26 +7,27 @@ import {
   fetchGoalLinks,
   createGoalLink,
   deleteGoalLink,
+  withdrawFromGoal,
 } from '../api/goals';
 import type { GoalCreate, GoalUpdate, GoalLinkCreate } from '../types';
 
 export const goalKeys = {
-  all:   ['goals']         as const,
-  list:  ['goals', 'list'] as const,
+  all: ['goals'] as const,
+  list: ['goals', 'list'] as const,
   links: ['goals', 'links'] as const,
 };
 
 export function useGoals() {
   return useQuery({
     queryKey: goalKeys.list,
-    queryFn:  fetchGoals,
+    queryFn: fetchGoals,
   });
 }
 
 export function useGoalLinks() {
   return useQuery({
     queryKey: goalKeys.links,
-    queryFn:  fetchGoalLinks,
+    queryFn: fetchGoalLinks,
   });
 }
 
@@ -81,6 +82,16 @@ export function useDeleteGoalLink() {
   });
 }
 
+export function useWithdrawFromGoal() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, amount }: { id: number; amount: number }) => withdrawFromGoal(id, amount),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: goalKeys.all });
+    },
+  });
+}
+
 export function useGoalActions() {
   return {
     create: useCreateGoal(),
@@ -88,5 +99,6 @@ export function useGoalActions() {
     remove: useDeleteGoal(),
     createLink: useCreateGoalLink(),
     removeLink: useDeleteGoalLink(),
+    withdraw: useWithdrawFromGoal(),
   };
 }

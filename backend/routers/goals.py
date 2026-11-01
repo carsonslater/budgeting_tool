@@ -22,8 +22,9 @@ import calendar
 from datetime import datetime
 from typing import Optional
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
+import goal_ledger
 from database import get_db
 
 router = APIRouter(prefix="/api/goals", tags=["goals"])
@@ -135,13 +136,56 @@ def delete_goal_link(link_id: int) -> None:
 # ── Goal CRUD ─────────────────────────────────────────────────────────────────
 
 
+class WithdrawalCreate(BaseModel):
+    amount: float = Field(gt=0)
+
+
+def _months_remaining(target_month: str, today: datetime) -> Optional[int]:
+    """Months from this month through the target month, inclusive; None when it has passed."""
+    try:
+        ty, tm = int(target_month[:4]), int(target_month[5:7])
+    except (TypeError, ValueError):
+        return None
+    n = (ty * 12 + tm) - (today.year * 12 + today.month) + 1
+    return n if n > 0 else None
+
+
 @router.get("")
 def list_goals() -> list[dict]:
+    today = datetime.now()
     with get_db() as conn:
         rows = conn.execute(
             "SELECT * FROM goals ORDER BY completed ASC, target_month ASC"
         ).fetchall()
-    return [_row_to_dict(r) for r in rows]
+        balances = goal_ledger.goal_balances(conn)
+        this_month = goal_ledger.goal_contributions(conn, today.strftime("%Y-%m"))
+    out = []
+    for row in rows:
+        goal = _row_to_dict(row)
+        balance = balances.get(goal["id"], 0.0)
+        months_left = _months_remaining(goal["target_month"], today)
+        goal["balance"] = balance
+        goal["contributed_this_month"] = this_month.get(goal["id"], 0.0)
+        goal["needs_per_month"] = (
+            round(max(0.0, goal["target_amount"] - balance) / months_left, 2)
+            if months_left and goal["completed"] == 0
+            else None
+        )
+        out.append(goal)
+    return out
+
+
+@router.post("/{goal_id}/withdrawals", status_code=201)
+def withdraw_from_goal(goal_id: int, body: WithdrawalCreate) -> dict:
+    with get_db() as conn:
+        try:
+            result = goal_ledger.add_withdrawal(conn, goal_id, body.amount)
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail=str(exc))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        conn.commit()
+    return result
 
 
 @router.post("", status_code=201)
@@ -261,6 +305,14 @@ def delete_goal(goal_id: int) -> None:
         ).fetchone()
         if not goal:
             raise HTTPException(status_code=404, detail="Goal not found")
+
+        # Ledger history is never deleted. A goal with any money movement is archived
+        # by marking it completed instead.
+        if goal_ledger.goal_has_ledger(conn, goal_id):
+            raise HTTPException(
+                status_code=409,
+                detail="Goal has sweep or withdrawal history; mark it completed instead",
+            )
 
         goal_name = goal["name"]
 

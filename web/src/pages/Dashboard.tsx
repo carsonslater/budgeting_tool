@@ -4,7 +4,7 @@ import { Card } from '../components/ui/Card';
 import { Badge } from '../components/ui/Badge';
 import { useExpenses } from '../hooks/useExpenses';
 import { useMonthPlan } from '../hooks/useMonthPlans';
-import { useGoals, useGoalLinks } from '../hooks/useGoals';
+import { useGoals } from '../hooks/useGoals';
 import { useReportSummary } from '../hooks/useReporting';
 import { useCountUp } from '../hooks/useCountUp';
 import styles from './Dashboard.module.css';
@@ -22,13 +22,12 @@ export const Dashboard: React.FC = () => {
   const currentMonth = format(new Date(), 'yyyy-MM');
   const { data: plan, isLoading: loadingIncome } = useMonthPlan(currentMonth);
   const { data: goals, isLoading: loadingGoals } = useGoals();
-  const { data: goalLinks, isLoading: loadingLinks } = useGoalLinks();
 
   // Budget health comes from the server partition so the Dashboard and the
   // Reporting page cannot disagree about a line's status.
   const { data: summary, isLoading: loadingSummary } = useReportSummary(currentMonth);
 
-  const isLoading = loadingExpenses || loadingIncome || loadingGoals || loadingLinks || loadingSummary;
+  const isLoading = loadingExpenses || loadingIncome || loadingGoals || loadingSummary;
 
   const {
     totalSpentThisMonth,
@@ -94,20 +93,10 @@ export const Dashboard: React.FC = () => {
       .slice(0, 5);
 
     // Goals Progress
-    const gProgress = goals?.filter(g => g.completed === 0).map(g => {
-      const links = goalLinks?.filter(l => l.goal_name === g.name) || [];
-      const saved = allExpenses?.reduce((sum, e) => {
-        const matchesLink = links.some(l =>
-          l.category === e.category &&
-          l.subcategory === e.subcategory &&
-          (!l.start_date || e.date >= l.start_date) &&
-          (!l.end_date || e.date <= l.end_date)
-        );
-        if (matchesLink) return sum + e.amount;
-        return sum;
-      }, 0) || 0;
-      return { ...g, saved };
-    }) || [];
+    const gProgress = goals?.filter(g => g.completed === 0).map(g => ({
+      ...g,
+      saved: g.balance ?? 0,
+    })) || [];
 
     return {
       totalSpentThisMonth: spentThis,
@@ -123,7 +112,7 @@ export const Dashboard: React.FC = () => {
       recentExpenses: recent,
       goalsProgress: gProgress
     };
-  }, [allExpenses, plan, summary, goals, goalLinks, isLoading]);
+  }, [allExpenses, plan, summary, goals, isLoading]);
 
   const animatedSpent = useCountUp(totalSpentThisMonth || 0, 1000);
   const animatedIncome = useCountUp(totalIncome || 0, 1000);
