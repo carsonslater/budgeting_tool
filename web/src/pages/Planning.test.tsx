@@ -18,6 +18,7 @@ const h = vi.hoisted(() => ({
   lines: [] as any[],
   plan: null as any,
   statuses: [] as any[],
+  suggestions: [] as any[],
 }));
 
 vi.mock('../hooks/useExpenses', () => ({
@@ -27,6 +28,7 @@ vi.mock('../hooks/useExpenses', () => ({
 
 vi.mock('../hooks/useBudgets', () => ({
   useBudgets: () => ({ data: h.lines, isLoading: false }),
+  useSuggestedBudgets: () => ({ data: h.suggestions }),
   useCreateBudget: () => ({ mutateAsync: h.createMutate, isPending: false }),
   useUpdateBudget: () => ({ mutateAsync: h.updateMutate, isPending: false }),
   useDeleteBudget: () => ({ mutateAsync: h.deleteMutate, isPending: false }),
@@ -73,6 +75,7 @@ function setPlan(overrides: Record<string, unknown> = {}) {
 beforeEach(() => {
   vi.clearAllMocks();
   h.lines = [groceries];
+  h.suggestions = [];
   h.statuses = [
     { month: currentMonth, status: 'inherited', confirmed_at: null },
     { month: nextMonth, status: 'confirmed', confirmed_at: '2026-10-20T10:00:00' },
@@ -191,5 +194,46 @@ describe('Planning — expected income', () => {
     render(<Planning />);
     // 4200 income - 300 budgeted per month = 3900
     expect(screen.getByText('$3,900.00')).toBeInTheDocument();
+  });
+});
+
+describe('Planning — suggestions', () => {
+  it('says so when the month has no suggestions', () => {
+    render(<Planning />);
+    expect(screen.getByText(/No suggestions for/)).toBeInTheDocument();
+  });
+
+  it('applies the hasty figure as the amount per period, keeping the frequency', async () => {
+    h.lines = [{ ...groceries, line_key: 'key-insurance', category: 'Car', subcategory: 'Insurance', frequency: 'Quarterly', limit_amount: 300 }];
+    h.suggestions = [
+      {
+        line_key: 'key-insurance',
+        month: currentMonth,
+        category: 'Car',
+        subcategory: 'Insurance',
+        current_limit: 300,
+        current_monthly_equiv: 100,
+        frequency: 'Quarterly',
+        hasty: 110,
+        conservative: 105,
+        recent_month_spent: 130,
+      },
+    ];
+    render(<Planning />);
+    fireEvent.click(screen.getByRole('button', { name: '$110.00' }));
+
+    await waitFor(() =>
+      expect(h.updateMutate).toHaveBeenCalledWith({
+        lineKey: 'key-insurance',
+        month: currentMonth,
+        data: {
+          category: 'Car',
+          subcategory: 'Insurance',
+          frequency: 'Quarterly',
+          limit_amount: 330,
+        },
+        scope: { apply: 'forward' },
+      }),
+    );
   });
 });

@@ -197,6 +197,13 @@ def test_suggested_attributes_by_id(client, db_path):
     assert suggestion["recent_month_spent"] == 700.0
 
 
+def test_suggested_skips_non_monthly_lines(client, db_path):
+    _add_line("Car", "Insurance", 1200.0, month="2025-05", frequency="Annually")
+    _add_expense("Car", "Insurance", 1200.0, day="2025-05-12")
+
+    assert client.get("/api/budgets/suggested?month=2025-06").json() == []
+
+
 def test_spending_by_category_groups_by_id(client, db_path):
     first = _add_expense("Food", "Groceries", 30.0)
     _add_expense("Food", "Groceries", 20.0, day="2025-03-11")

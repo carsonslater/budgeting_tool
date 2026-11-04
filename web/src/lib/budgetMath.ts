@@ -19,3 +19,9 @@ export function monthlyEquivalent(limit: number, frequency: string): number {
   const divisor = FREQUENCY_DIVISORS[frequency] ?? 1;
   return Math.round((limit / divisor) * 100) / 100;
 }
+
+/** A monthly amount expressed as the amount per period for a cadence (rounded to cents). */
+export function periodAmountFromMonthly(monthly: number, frequency: string): number {
+  const divisor = FREQUENCY_DIVISORS[frequency] ?? 1;
+  return Math.round(monthly * divisor * 100) / 100;
+}

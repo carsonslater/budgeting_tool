@@ -8,9 +8,14 @@ import { Select } from '../components/ui/Select';
 import { MonthPicker } from '../components/ui/MonthPicker';
 import { ApplyScopeControl } from '../components/planning/ApplyScopeControl';
 import { MonthStatusStrip } from '../components/planning/MonthStatusStrip';
+import {
+  SuggestionsPanel,
+  type SuggestionChoice,
+} from '../components/planning/SuggestionsPanel';
 import { useCategories, useSubcategories } from '../hooks/useExpenses';
 import {
   useBudgets,
+  useSuggestedBudgets,
   useCreateBudget,
   useUpdateBudget,
   useDeleteBudget,
@@ -30,8 +35,8 @@ import {
 } from '../lib/applyScope';
 import { monthLabel, shiftMonth } from '../lib/monthMath';
 import styles from './Planning.module.css';
-import type { Budget } from '../types';
-import { monthlyEquivalent } from '../lib/budgetMath';
+import type { Budget, SuggestedBudget } from '../types';
+import { monthlyEquivalent, periodAmountFromMonthly } from '../lib/budgetMath';
 
 const FREQUENCIES: Budget['frequency'][] = [
   'Monthly',
@@ -95,6 +100,7 @@ export const Planning: React.FC = () => {
   const { data: subcategories } = useSubcategories(category, month);
   const { data: budgets, isLoading } = useBudgets(month);
   const { data: prevBudgets } = useBudgets(prevMonth);
+  const { data: suggestions } = useSuggestedBudgets(month);
   const { data: statuses } = useMonthPlanStatuses(stripStart, stripEnd);
   const { data: plan } = useMonthPlan(month);
 
@@ -226,6 +232,30 @@ export const Planning: React.FC = () => {
       showToast('Expected income saved', 'success');
     } catch (e: any) {
       showToast(e?.message || 'Could not save the expected income', 'error');
+    }
+  };
+
+  // A suggestion is stated per month; the stored amount is per period for the line's
+  // cadence. Frequency is unchanged, and the write follows the "Applies to" scope.
+  const handleApplySuggestion = async (s: SuggestedBudget, choice: SuggestionChoice) => {
+    if (scopeError) return;
+    const amount = periodAmountFromMonthly(s[choice], s.frequency);
+    try {
+      await updateBudget.mutateAsync({
+        lineKey: s.line_key,
+        month,
+        data: {
+          category: s.category,
+          subcategory: s.subcategory,
+          frequency: s.frequency as Budget['frequency'],
+          limit_amount: amount,
+        },
+        scope: toApplyScope(applyChoice),
+      });
+      setApplyChoice(DEFAULT_APPLY_CHOICE);
+      showToast(`Budget line set to ${formatCurrency(amount)} per period`, 'success');
+    } catch (e: any) {
+      showToast(e?.message || 'Could not apply the suggestion', 'error');
     }
   };
 
@@ -396,9 +426,8 @@ export const Planning: React.FC = () => {
           <div className={styles.summaryItem}>
             <span className={styles.summaryLabel}>Income less budget</span>
             <span
-              className={`${styles.summaryValue} ${
-                incomeLessBudget !== null && incomeLessBudget < 0 ? styles.danger : ''
-              }`}
+              className={`${styles.summaryValue} ${incomeLessBudget !== null && incomeLessBudget < 0 ? styles.danger : ''
+                }`}
             >
               {incomeLessBudget === null ? '—' : formatCurrency(incomeLessBudget)}
             </span>
@@ -522,6 +551,19 @@ export const Planning: React.FC = () => {
               </tbody>
             </table>
           </div>
+        </div>
+
+        {/* Suggestions */}
+        <div className={styles.section}>
+          <div className={styles.sectionHeader}>
+            <h2 className={styles.sectionTitle}>Suggestions</h2>
+          </div>
+          <SuggestionsPanel
+            suggestions={suggestions ?? []}
+            monthLabel={monthLabelText}
+            disabled={busy || !!scopeError}
+            onApply={handleApplySuggestion}
+          />
         </div>
       </div>
     </div>

@@ -1,5 +1,28 @@
 import { describe, it, expect } from 'vitest';
-import { FREQUENCY_DIVISORS, monthlyEquivalent } from './budgetMath';
+import {
+  FREQUENCY_DIVISORS,
+  monthlyEquivalent,
+  periodAmountFromMonthly,
+} from './budgetMath';
+
+describe('periodAmountFromMonthly', () => {
+  it('leaves a monthly amount unchanged', () => {
+    expect(periodAmountFromMonthly(500, 'Monthly')).toBe(500);
+  });
+
+  it('multiplies by the cadence divisor', () => {
+    expect(periodAmountFromMonthly(100, 'Annually')).toBe(1200);
+    expect(periodAmountFromMonthly(100, 'Quarterly')).toBe(300);
+    expect(periodAmountFromMonthly(100, 'Bi-annually')).toBe(600);
+  });
+
+  it('round-trips with monthlyEquivalent to the cent', () => {
+    for (const frequency of ['Monthly', 'Quarterly', 'Bi-annually', 'Annually']) {
+      const period = periodAmountFromMonthly(87.5, frequency);
+      expect(monthlyEquivalent(period, frequency)).toBe(87.5);
+    }
+  });
+});
 
 describe('monthlyEquivalent', () => {
   it('leaves a monthly limit unchanged', () => {

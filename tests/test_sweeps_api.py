@@ -76,6 +76,7 @@ def world(client):
         },
     )
     client.put("/api/month-plans/2025-01/income", json={"amount": 3000})
+    client.put("/api/sweeps/baseline", json={"month": "2025-01"})
     client.post(
         "/api/expenses",
         json={
@@ -119,7 +120,11 @@ def world(client):
 
 def approve_from_proposal(client, month):
     p = client.get("/api/sweeps/proposal", params={"month": month}).json()
-    body = {"allocations": [{"goal_id": g["goal_id"], "amount": g["amount"]} for g in p["goals"]]}
+    body = {
+        "allocations": [
+            {"goal_id": g["goal_id"], "amount": g["amount"]} for g in p["goals"]
+        ]
+    }
     return client.post(f"/api/sweeps/{month}/approve", json=body)
 
 

@@ -285,3 +285,19 @@ export interface MonthPlan extends MonthPlanStatus {
   expected_income: number | null;
   income_set_in: string | null;
 }
+
+// ── Turnover ──────────────────────────────────────────────────────────────────
+
+export interface TurnoverStatus {
+  state: 'setup' | 'turnover' | 'none';
+  baseline: string | null;
+  target: string | null;
+  default_month: string;
+  confirmed: boolean | null;
+  income_missing: boolean | null;
+}
+
+export interface TurnoverSetup {
+  month: string;
+  openings: { line_key: string; amount: number }[];
+}

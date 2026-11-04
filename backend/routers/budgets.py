@@ -131,8 +131,14 @@ def get_suggested_budgets(
 
     with get_db() as conn:
         lines, _inherited = budget_store.resolve_view(conn, target)
+        # Non-monthly lines are skipped: a bill that lands in one month would make the
+        # WMA a spike, not a monthly rate. Their reserve is set by the amount per period.
         active = sorted(
-            (line for line in lines if line["limit_amount"] > 0),
+            (
+                line
+                for line in lines
+                if line["limit_amount"] > 0 and line["frequency"] == "Monthly"
+            ),
             key=lambda line: (line["category"], line["subcategory"]),
         )
 

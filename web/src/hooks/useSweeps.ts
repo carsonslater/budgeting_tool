@@ -36,6 +36,7 @@ export function useSweepActions() {
     const refresh = () => {
         qc.invalidateQueries({ queryKey: sweepKeys.all });
         qc.invalidateQueries({ queryKey: ['goals'] });
+        qc.invalidateQueries({ queryKey: ['turnover'] });
     };
 
     return {

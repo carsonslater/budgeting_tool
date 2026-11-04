@@ -242,6 +242,173 @@ def add_withdrawal(conn: sqlite3.Connection, goal_id: int, amount: float) -> dic
     return {"goal_id": goal_id, "balance": round(balance - amount, 2)}
 
 
+# ── Baseline and opening balances ────────────────────────────────────────────
+
+BASELINE_KEY = "sweep_baseline"
+
+
+def get_baseline(conn: sqlite3.Connection) -> Optional[str]:
+    """The first month the ledger covers, or ``None`` before it is set."""
+    row = conn.execute(
+        "SELECT value FROM app_settings WHERE key = ?", (BASELINE_KEY,)
+    ).fetchone()
+    return row["value"] if row else None
+
+
+def set_baseline(conn: sqlite3.Connection, month: str) -> str:
+    """Set the baseline once. Nothing before it is reserved, swept or prompted."""
+    _require_month(month)
+    current = get_baseline(conn)
+    if current is not None:
+        raise LedgerConflict(f"the sweep baseline is already {current}")
+    conn.execute(
+        "INSERT INTO app_settings (key, value) VALUES (?, ?)", (BASELINE_KEY, month)
+    )
+    return month
+
+
+def openings_for_baseline(conn: sqlite3.Connection) -> dict[str, float]:
+    """Net opening balance per irregular line, dated the month before the baseline."""
+    baseline = get_baseline(conn)
+    if baseline is None:
+        return {}
+    rows = conn.execute(
+        """SELECT line_key, ROUND(SUM(amount), 2) AS balance
+           FROM goal_allocations
+           WHERE month = ? AND line_key IS NOT NULL
+             AND (kind = 'opening'
+                  OR (kind = 'reversal' AND reverses_id IN
+                      (SELECT id FROM goal_allocations WHERE kind = 'opening')))
+           GROUP BY line_key""",
+        (_previous_month(baseline),),
+    ).fetchall()
+    return {r["line_key"]: r["balance"] for r in rows if abs(r["balance"]) > _TOLERANCE}
+
+
+def add_opening(conn: sqlite3.Connection, line_key: str, amount: float) -> dict:
+    """
+    Set an irregular line's opening fund balance, dated the month before the baseline.
+
+    That month is the balance at the start of the baseline, so the baseline's own bills
+    draw on it. Nothing before the baseline is swept, so this row is never reserved against.
+
+    Allowed only before any month closes. An earlier opening is cancelled by a reversal
+    row and the new amount is appended; zero clears it. Rows are never updated.
+    """
+    baseline = get_baseline(conn)
+    if baseline is None:
+        raise ValueError("set the sweep baseline before entering opening balances")
+    if amount < 0:
+        raise ValueError("an opening balance cannot be negative")
+    if closed_months(conn):
+        raise LedgerConflict("a month is already closed; opening balances are fixed")
+    lines, _inherited = budget_store.resolve_view(conn, baseline)
+    if not any(
+        line["line_key"] == line_key and line["frequency"] != "Monthly"
+        for line in lines
+    ):
+        raise ValueError(
+            f"{line_key} is not an irregular budget line active in {baseline}"
+        )
+
+    opening_month = _previous_month(baseline)
+    now = _now()
+    existing = conn.execute(
+        """SELECT id, amount FROM goal_allocations
+           WHERE line_key = ? AND month = ? AND kind = 'opening'
+             AND id NOT IN (SELECT reverses_id FROM goal_allocations
+                            WHERE reverses_id IS NOT NULL)""",
+        (line_key, opening_month),
+    ).fetchall()
+    for row in existing:
+        conn.execute(
+            """INSERT INTO goal_allocations
+                 (line_key, month, kind, amount, reverses_id, created_at)
+               VALUES (?, ?, 'reversal', ?, ?, ?)""",
+            (line_key, opening_month, -row["amount"], row["id"], now),
+        )
+    if amount > 0:
+        conn.execute(
+            """INSERT INTO goal_allocations (line_key, month, kind, amount, created_at)
+               VALUES (?, ?, 'opening', ?, ?)""",
+            (line_key, opening_month, round(amount, 2), now),
+        )
+    return {"line_key": line_key, "month": opening_month, "amount": round(amount, 2)}
+
+
+# ── Turnover ─────────────────────────────────────────────────────────────────
+
+
+def turnover_status(conn: sqlite3.Connection, today: Optional[str] = None) -> dict:
+    """
+    What the turnover prompt should ask for, if anything.
+
+    ``setup``: no baseline yet. The user picks the first tracked month (default: last
+    month) and enters its irregular fund openings.
+    ``turnover``: ``target`` is the earliest month from the baseline through last month
+    that is not closed. Months close strictly in order, so the prompt walks them one at
+    a time.
+    ``none``: every ended month since the baseline is closed.
+    """
+    today = _require_month(today or _current_month())
+    prev = _previous_month(today)
+    baseline = get_baseline(conn)
+    if baseline is None:
+        return {
+            "state": "setup",
+            "baseline": None,
+            "target": None,
+            "default_month": prev,
+            "confirmed": None,
+            "income_missing": None,
+        }
+
+    closed = set(closed_months(conn))
+    target = None
+    month = baseline
+    while month <= prev:
+        if month not in closed:
+            target = month
+            break
+        month = budget_store.shift_month(month, 1)
+
+    if target is None:
+        return {
+            "state": "none",
+            "baseline": baseline,
+            "target": None,
+            "default_month": prev,
+            "confirmed": None,
+            "income_missing": None,
+        }
+    plan = budget_store.get_plan(conn, target)
+    return {
+        "state": "turnover",
+        "baseline": baseline,
+        "target": target,
+        "default_month": prev,
+        "confirmed": plan["status"] == "confirmed",
+        "income_missing": plan["expected_income"] is None,
+    }
+
+
+def complete_setup(
+    conn: sqlite3.Connection, month: str, openings: dict[str, float]
+) -> dict:
+    """
+    Start tracking at ``month`` and enter its irregular fund openings, as one write.
+
+    Any failure raises before the caller commits, so a bad line leaves no baseline behind.
+    """
+    _require_month(month)
+    if month > _current_month():
+        raise ValueError("the baseline cannot be a future month")
+    set_baseline(conn, month)
+    for line_key, amount in openings.items():
+        add_opening(conn, line_key, amount)
+    return {"month": month, "openings": openings_for_baseline(conn)}
+
+
 # ── Month-end proposal ───────────────────────────────────────────────────────
 
 
@@ -286,6 +453,11 @@ def _blocker(conn: sqlite3.Connection, month: str) -> Optional[str]:
     closed = closed_months(conn)
     if month in closed:
         return f"{month} is already closed"
+    baseline = get_baseline(conn)
+    if baseline is None:
+        return "set the sweep baseline before closing any month"
+    if month < baseline:
+        return f"{month} is before the sweep baseline {baseline}"
     if month > _previous_month(_current_month()):
         return f"{month} has not ended yet"
     if closed and _previous_month(month) not in closed:

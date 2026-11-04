@@ -10,6 +10,9 @@ Routes:
     GET    /api/sweeps/proposal?month=       read-only leftover and split
     POST   /api/sweeps/{month}/approve       close the month with the accepted split
     POST   /api/sweeps/{month}/reopen        append reversals and reopen the month
+    GET    /api/sweeps/baseline              the sweep baseline and opening balances
+    PUT    /api/sweeps/baseline              set the baseline (once)
+    POST   /api/sweeps/openings              set an irregular line's opening balance
 
 Errors are raised inside the connection context, so a failed request writes nothing.
 """
@@ -174,3 +177,44 @@ def reopen(month: str) -> dict:
             raise _http(exc)
         conn.commit()
     return {"month": month, "closed": False}
+
+
+# ── Baseline and openings ────────────────────────────────────────────────────
+
+
+class BaselineSet(BaseModel):
+    month: str
+
+
+class OpeningSet(BaseModel):
+    line_key: str
+    amount: float = Field(ge=0)
+
+
+@router.get("/baseline")
+def get_baseline() -> dict:
+    with get_db() as conn:
+        month = goal_ledger.get_baseline(conn)
+        return {"month": month, "openings": goal_ledger.openings_for_baseline(conn)}
+
+
+@router.put("/baseline")
+def set_baseline(body: BaselineSet) -> dict:
+    with get_db() as conn:
+        try:
+            month = goal_ledger.set_baseline(conn, body.month)
+        except (ValueError, goal_ledger.LedgerConflict) as exc:
+            raise _http(exc)
+        conn.commit()
+    return {"month": month, "openings": {}}
+
+
+@router.post("/openings", status_code=201)
+def add_opening(body: OpeningSet) -> dict:
+    with get_db() as conn:
+        try:
+            result = goal_ledger.add_opening(conn, body.line_key, body.amount)
+        except (ValueError, goal_ledger.LedgerConflict) as exc:
+            raise _http(exc)
+        conn.commit()
+    return result

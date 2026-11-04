@@ -8,11 +8,13 @@ import { Reporting } from './pages/Reporting';
 import { AppSettings } from './pages/Settings';
 
 import { ToastProvider } from './contexts/ToastContext';
+import { TurnoverModal } from './components/turnover/TurnoverModal';
 
 function App() {
   return (
     <ToastProvider>
       <BrowserRouter>
+        <TurnoverModal />
         <Routes>
           <Route element={<AppLayout />}>
             <Route index element={<Dashboard />} />

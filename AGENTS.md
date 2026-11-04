@@ -130,9 +130,12 @@ rename updates `categories` and `expenses` only; also owns the expense read proj
   history (mark it completed instead).
 - Frontend: `components/sweeps/SweepPanel.tsx` (on the Goals page) and `SweepRules.tsx`, with
   `hooks/useSweeps.ts` and `api/sweeps.ts`. Closed months display the figures stored at close.
-- **Open gap: no opening balances.** The ledger starts empty, so the first approved month treats every
-  fund as starting at zero. A bill that month then shows a shortfall that is an artifact of the empty
-  ledger, not spending. Resolve this (opening rows) before the first live sweep.
+- **Baseline and openings (Phase 4).** The sweep baseline is the first month the ledger covers. It is
+  stored in `app_settings` (`sweep_baseline`, m0007) and set once. Approval refuses any month before it,
+  and refuses every month until it is set. Each irregular line's opening fund balance is a `kind='opening'`
+  row dated the **month before** the baseline, so it is the balance at the start of the baseline and funds
+  that month's bills. Openings can change only before any month closes; an earlier opening is cancelled by
+  a reversal row. `complete_setup` writes the baseline and openings in one transaction.
 - Live DB state: no sweep rules, no closed months, and no goal allocations. The sweep does nothing
   until rules exist. Income is inherited from 2020-01 (see Migrations), so every month has income unless
   overridden.
@@ -142,11 +145,11 @@ rename updates `categories` and `expenses` only; also owns the expense read proj
 ## Migrations
 
 `backend/migrations/runner.py` keys on `PRAGMA user_version`. The `MIGRATIONS` tuple is
-**append-only**. `LATEST_VERSION` is `max(version)`, currently **6**. `run_migrations` requires no
+**append-only**. `LATEST_VERSION` is `max(version)`, currently **7**. `run_migrations` requires no
 pending transaction and sets `PRAGMA foreign_keys=ON` before `BEGIN`. Helpers are in
 `migrations/helpers.py`.
 
-Shipped migrations are **frozen. Never edit them.** That covers `m0001` through `m0006`. The next
+Shipped migrations are **frozen. Never edit them.** That covers `m0001` through `m0007`. The next
 change is `m0007`.
 
 - `m0003` (filename predates the model) expands legacy `budgets` windows into versions. It is
@@ -165,13 +168,15 @@ change is `m0007`.
 - `m0006` creates `goal_allocations` (the goal ledger; see the Goal ledger section) and adds the close
   figures to `closed_months` (`expected_income`, `regular_spend`, `reserve_total`, `shortfall`,
   `swept_total`). `leftover_capped` is no longer written.
+- `m0007` creates `app_settings(key, value)`, a key-value table. It writes no rows. The first key is
+  `sweep_baseline`.
 
 **Startup runs migrations and snapshots first.** When migrations are pending and the DB has data,
 the lifespan writes `backups/pre_migration_v{from}_to_v{to}_{stamp}.db` via SQLite's backup API, then
 migrates. `POST /api/backup` uses the same helper (`database.snapshot_database`). Take DB copies with
 the backup API, never `shutil.copyfile`, because a plain copy can miss WAL pages.
 
-**The live DB is still at `user_version=3`.** It will migrate to 6 on the next app start, with a
+**The live DB is still at `user_version=3`.** It will migrate to 7 on the next app start, with a
 snapshot. A dry run on a backup-API copy (2026-11-01) applied m0004 to m0006 cleanly, with integrity OK.
 The live DB was not changed. m0004 placed the legacy $6,000 income at 2020-01, the earliest dated
 row (legacy budgets), not 2025-11.
@@ -263,8 +268,9 @@ on the live DB (before m0004/m0005): OK, 59 lines / 108 versions over 96 months,
 
 ## Current state
 
-Verified after the Phase 3 changes: backend 262 tests pass, frontend 34 tests pass, the build is
-clean. The property test for frequency edits is mutation-checked: disabling the switch validation
+Verified after Phase 4: backend 285 tests pass, frontend 47 tests pass, the build is clean. A
+backup-API copy of the live DB migrated from v3 to v7 (integrity OK), and the turnover setup and
+proposal worked on it. Phase 3 checks: backend 262 tests and frontend 34 tests passed, and the build was clean. The property test for frequency edits is mutation-checked: disabling the switch validation
 makes five tests fail. The Planning UI has not been checked in a running browser.
 
 ### Phase status vs `.posit/assistant/plans/2026-09-28-1903-plan.md`
@@ -275,22 +281,17 @@ makes five tests fail. The Planning UI has not been checked in a running browser
 | 1 annual lines out of monthly reporting | Done (`/summary` returns `{monthly, non_monthly}`). |
 | 2 category agility, rename by ID | Done, including id-based reads. |
 | 3 month-end sweep into goals | Built (m0006, `goal_ledger.py`, `routers/sweeps.py`, sweep panel on Goals). Open: opening balances for the first sweep month; see the Goal ledger section. |
-| 4 month-by-month budgeting | Backend done. UI done for the status strip, Keep as is / Edit, Applies-to, and expected income. Not done: suggestions wiring, turnover modal. |
+| 4 month-by-month budgeting | Done. Status strip, Keep as is / Edit, Applies-to, expected income, suggestions (non-monthly lines excluded), baseline and openings (m0007), and the blocking turnover modal. The Planning screen has not been checked in a running browser. |
 
 Because Phase 3 does not exist, the synthetic-budget writes dropped from `goals.py` are **not
 compensated**. Goals currently drive no monthly savings amount.
 
 ### Remaining
 
-1. Check the Planning screen in a running app, including a frequency switch and the nearest-month
-   message.
-2. Wire `useSuggestedBudgets(month)` into `Planning.tsx`. The hook and `fetchSuggestedBudgets` exist but
-   are unused. "Apply" converts monthly equivalents to per-period amounts for non-monthly lines, with a
-   test for that conversion.
-3. Blocking turnover modal on boot. It needs a baseline so history is not prompted.
-4. Phase 3 opening balances: enter a starting balance per irregular-line fund for the first sweep
-   month (`kind='opening'`, already allowed by the CHECK). Needed before the first live sweep.
-5. Decide whether to amend the 09-28 plan in place or let later plans supersede it.
+1. Browser check of Planning and the turnover modal on a copy of the DB. Neither has been run in a browser.
+2. Goals UI direction (not decided; see the Decisions section).
+3. Decide whether to amend the 09-28 plan in place or let later plans supersede it. The Phase 4 plan
+   (`2026-11-01-1715-plan.md`) supersedes its §7.
 
 ### Decisions
 
@@ -314,8 +315,13 @@ Phase 3 sweep design (built; the Goal ledger section records what differs in pra
   target leaves its share Unallocated. It does **not** overflow to the next goal.
 - **Goal money:** an append-only `goal_allocations` ledger (`goal_id`, `month`, `amount`, `kind`).
   Balance is the sum, and withdrawals are negative rows. Not `expenses` rows. Annual-bill funds reuse it.
-- **Turnover UX:** a blocking modal on boot when the prior month is unconfirmed or unswept, in three
-  steps: confirm budget, review leftover, approve sweep.
+- **Turnover UX (built):** a blocking modal, with no close control, Escape or overlay dismiss. It
+  opens when `GET /api/turnover` reports `setup` (no baseline) or `turnover`. Setup picks the first
+  tracked month (default: last month) and its openings. A turnover walks the earliest unclosed ended
+  month from the baseline in three steps: confirm budget (and expected income, which the modal
+  edits so a missing income cannot strand the user), review leftover, approve sweep.
+- **Suggestions (built):** `/api/budgets/suggested` skips non-monthly lines. Apply stores the amount per
+  period (`periodAmountFromMonthly`), keeps the frequency, and follows "Applies to".
 - **UI direction (not decided):** Goals cards show saved balance, monthly contribution, and "needs
   $X/month" against sweep delivery. Group Planning lines into Monthly and Irregular bills. Consider
   renaming Settings to Import.

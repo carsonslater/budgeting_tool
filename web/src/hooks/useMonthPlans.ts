@@ -37,6 +37,7 @@ export function useConfirmMonth() {
     mutationFn: (month: string) => confirmMonthPlan(month),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: monthPlanKeys.all });
+      qc.invalidateQueries({ queryKey: ['turnover'] });
       // A line's `inherited` flag is read from the month's confirmation state.
       qc.invalidateQueries({ queryKey: budgetKeys.all });
     },
@@ -50,6 +51,7 @@ export function useSetExpectedIncome() {
       setExpectedIncome(month, amount, scope),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: monthPlanKeys.all });
+      qc.invalidateQueries({ queryKey: ['turnover'] });
     },
   });
 }
